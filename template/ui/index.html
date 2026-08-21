@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="title">Notes</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header>
+  <h1 data-i18n="title">Notes</h1>
+  <span class="sub" id="status" data-i18n="loading">Loading…</span>
+</header>
+<main>
+  <section>
+    <label for="body" data-i18n="newNote">New note</label>
+    <textarea id="body"></textarea>
+    <div class="row"><button class="primary" id="save" data-i18n="save">Save</button></div>
+    <div class="msg" id="msg"></div>
+  </section>
+  <section>
+    <h2 data-i18n="stored">Stored</h2>
+    <ul id="notes"></ul>
+  </section>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "example-module-server": {
+      "command": "madcowork:python",
+      "args": [
+        "-c",
+        "import os,runpy,sys; h=os.environ.get('MADCOWORK_HOME') or os.path.join(os.path.expanduser('~'),'.madcowork'); p=os.path.join(h,'plugins','example-module'); sys.path.insert(0,p); runpy.run_path(os.path.join(p,'server.py'),run_name='__main__')"
+      ]
+    }
+  }
+}

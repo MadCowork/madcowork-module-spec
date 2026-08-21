@@ -1,0 +1,106 @@
+"""A minimal MadCowork module: one tool, one screen, one skill.
+
+Copy this directory, rename it, and start replacing. It already passes
+`tools/check_contract.py`, so the first red line you see will be about
+your change — not about the skeleton.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+from _local_ui import LocalUiServer
+from _mcp_runtime import McpServer
+
+MAD_HOME = Path(__file__).resolve().parents[2]
+DATA_DIR = MAD_HOME / "module-data" / "example-module"
+DB_PATH = DATA_DIR / "notes.sqlite3"
+SCHEMA_VERSION = 1
+VERSION = "0.1.0"
+
+
+def _connect() -> sqlite3.Connection:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS notes ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " body TEXT NOT NULL,"
+        " created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
+    )
+    conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('schema_version',?)",
+                 (str(SCHEMA_VERSION),))
+    conn.commit()
+    return conn
+
+
+def tool_doctor(args: dict) -> dict:
+    with _connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+    return {"version": VERSION, "schema_version": SCHEMA_VERSION,
+            "data_dir": str(DATA_DIR), "notes": count,
+            "note": "This module stores notes locally. It sends nothing anywhere."}
+
+
+def tool_add_note(args: dict) -> dict:
+    body = str(args.get("body") or "").strip()
+    if not body:
+        raise ValueError("body is required")
+    with _connect() as conn:
+        cur = conn.execute("INSERT INTO notes(body) VALUES(?)", (body,))
+        conn.commit()
+    return {"note_id": cur.lastrowid, "body": body}
+
+
+def tool_list_notes(args: dict) -> dict:
+    with _connect() as conn:
+        rows = conn.execute("SELECT id, body, created_at FROM notes ORDER BY id DESC").fetchall()
+    return {"notes": [dict(r) for r in rows]}
+
+
+UI = LocalUiServer("example-module", Path(__file__).resolve().parent / "ui", {
+    "list_notes": tool_list_notes,
+    "add_note": tool_add_note,
+})
+
+
+def tool_open_ui(args: dict) -> dict:
+    return UI.open()
+
+
+TOOLS = [
+    {"name": "example_doctor",
+     "description": "Report module version, schema version and where data lives.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "example_add_note",
+     "description": "Store one note locally.",
+     "inputSchema": {"type": "object", "properties": {"body": {"type": "string"}},
+                     "required": ["body"]}},
+    {"name": "example_list_notes",
+     "description": "List every stored note, newest first.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "example_open_ui",
+     "description": "Open the notes workbench in MadCowork's browser panel.",
+     "inputSchema": {"type": "object", "properties": {}}},
+]
+
+HANDLERS = {
+    "example_doctor": tool_doctor,
+    "example_add_note": tool_add_note,
+    "example_list_notes": tool_list_notes,
+    "example_open_ui": tool_open_ui,
+}
+
+def handle(name: str, args: dict):
+    fn = HANDLERS.get(name)
+    if fn is None:
+        raise ValueError(f"unknown tool: {name}")
+    return fn(args or {})
+
+
+if __name__ == "__main__":
+    McpServer("example-module", VERSION, TOOLS, handle).run()

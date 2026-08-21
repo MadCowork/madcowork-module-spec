@@ -1,0 +1,9 @@
+{
+  "name": "example-module",
+  "version": "0.1.0",
+  "description": "A minimal MadCowork module: one tool, one screen, one skill.",
+  "moduleApiVersion": 1,
+  "minimumHostVersion": "0.55.0",
+  "repository": "https://github.com/YOUR-NAME/example-module",
+  "runtimeInvariant": {"module": "invariant", "entry": "check"}
+}

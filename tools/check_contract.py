@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""模組契約自我檢查 —— 在自己的 CI 跑,不要等使用者裝進去才發現。
+"""Contract self-check — run this in your own CI, not after a user installs.
 
-host 端會擋的事(截斷後撞名、minimumHostVersion 不符),模組作者無從得知
-其他模組叫什麼名字,但**自己這一包合不合規**是可以先驗的。
+Some things only the host can decide (whether your tool names collide with
+another module's after truncation, whether the running version satisfies your
+`minimumHostVersion`) because you cannot know what else is installed. But
+**whether your own package is well-formed is checkable before you ship it.**
 
-檢查項目對應《MadCowork 模組契約 v1》:
-  §2  skills/ 可以帶(2026-08-16 解禁),但工具名必須寫 host 包裝後的 wrapped 名
-  §3  plugin.json 五個必填欄位 + SemVer 格式
-  §4  必須有 UI(鐵律)
-  §5  mcp.json 用哨兵,不得寫絕對路徑
-  §6  工具名在截斷預算內(host 會擋撞名,但長度是自己該顧的)
-  §7  不得把資料寫進模組目錄(要用 module-data)
+Checks map to the MadCowork Module Contract v1:
+  §2   skills/ are allowed, but tool names must be written the way the model
+       sees them (the MCP-wrapped form)
+  §3   plugin.json required fields and SemVer format
+  §4   a UI must exist, and must survive the CSP it is served under
+  §5   mcp.json uses the sentinel, never an absolute path
+  §6   tool names fit the truncation budget
+  §7   data is not written into the module directory
+  §10  a runtime invariant exists, or its absence is explained
+  §11  Known Limitations are stated
 
-用法:python3 scripts/check_contract.py [模組目錄]
+Usage: python3 check_contract.py [module-directory]
 """
 
 from __future__ import annotations
@@ -38,30 +43,32 @@ def warn(msg: str) -> None:
 # ── §3 plugin.json ────────────────────────────────────────────────────────
 pj_path = MODULE / "plugin.json"
 if not pj_path.exists():
-    fail("plugin.json 不存在")
+    fail("plugin.json is missing")
     pj = {}
 else:
     pj = json.loads(pj_path.read_text(encoding="utf-8"))
     for field in ("name", "version", "description", "moduleApiVersion", "minimumHostVersion"):
         if field not in pj:
-            fail(f"plugin.json 缺欄位:{field}")
+            fail(f"plugin.json is missing a required field: {field}")
     SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-+].*)?$")
     for field in ("version", "minimumHostVersion"):
         v = str(pj.get(field, ""))
         if v and not SEMVER.match(v):
-            fail(f"plugin.json 的 {field} 不是合法 SemVer:{v!r}")
+            fail(f"plugin.json {field} is not valid SemVer: {v!r}")
 
 name = str(pj.get("name", ""))
 
-# ── §4 UI 是必要的 ────────────────────────────────────────────────────────
+# ── §4 The screen is required ─────────────────────────────────────────────
 index_html = MODULE / "ui" / "index.html"
 if not index_html.exists():
-    fail("缺 ui/index.html —— UI 是鐵律,不是選配")
+    fail("ui/index.html is missing — the screen is required, not optional")
 else:
-    # §4.1 UI 是在嚴格 CSP 之下送出的:行內樣式/腳本沒有 URL,匹配不到任何
-    # source-list 條目,會被瀏覽器整段拒用 —— 而且是靜默拒用:HTTP 200、
-    # 位元組數正確、外部 .js 照跑,只有畫面是裸的。位元組層的測試看不見這件事,
-    # 所以在這裡靜態擋掉,不要讓模組作者裝進去才發現。
+    # §4.1 The UI is served under a strict CSP. Inline styles and scripts have
+    # no URL, so they can never match a source-list entry and the browser
+    # refuses them outright — silently: HTTP 200, correct byte count, the
+    # external .js still runs, and only the screen is bare. Byte-level tests
+    # cannot see this, so it is blocked statically here rather than discovered
+    # after a user installs the package.
     html = index_html.read_text(encoding="utf-8", errors="replace")
     helper = MODULE / "_local_ui.py"
     csp = ""
@@ -72,7 +79,8 @@ else:
             csp = "".join(re.findall(r'"([^"]*)"', m.group(1)))
 
     def allows_inline(directive: str) -> bool:
-        # 沒有可解析的 CSP 時,一律以契約規定的嚴格政策為準(寧可誤紅不可漏綠)
+        # With no parsable CSP, assume the strict policy the contract mandates
+        # (a false alarm is cheaper than a missed one)
         if not csp:
             return False
         table = {}
@@ -84,55 +92,57 @@ else:
 
     if not allows_inline("style-src"):
         if "<style" in html:
-            fail("ui/index.html 有 <style> 區塊 —— CSP style-src 不含 'unsafe-inline',"
-                 "會被靜默拒用(HTTP 200 但畫面全裸)")
+            fail("ui/index.html has a <style> block — style-src does not allow "
+                 "'unsafe-inline', so it is silently refused (HTTP 200, bare screen)")
         if re.search(r'\sstyle\s*=\s*["\']', html):
-            fail("ui/index.html 有 style= 行內屬性 —— 同樣被 CSP 拒用,改用外部樣式表的 class")
+            fail("ui/index.html has an inline style= attribute — also refused by CSP; use a class from an external stylesheet")
     if not allows_inline("script-src"):
         for tag in re.findall(r"<script\b[^>]*>", html):
             if "src=" not in tag:
-                fail(f"ui/index.html 有行內 <script> —— CSP 會拒用:{tag}")
+                fail(f"ui/index.html has an inline <script> — CSP refuses it: {tag}")
         if re.search(r'\son[a-z]+\s*=\s*["\']', html):
-            fail("ui/index.html 有 on…= 事件屬性 —— CSP 會拒用,改用 addEventListener/.onclick")
+            fail("ui/index.html has an on…= event attribute — CSP refuses it; use addEventListener or .onclick")
 
-    # 反面條件不能單獨成立:「沒有行內樣式」用「完全沒有樣式」也達得到,
-    # 而那正是被拒用後的實際畫面。所以要求真的外連了樣式表,且檔案有內容。
+    # The negative condition cannot stand alone: "no inline styles" is also
+    # satisfied by having no styles at all — which is exactly what a refused
+    # stylesheet looks like. So require that one is linked and actually there.
     sheets = re.findall(r'<link[^>]*rel=["\']stylesheet["\'][^>]*href=["\']([^"\']+)["\']', html)
     if not sheets:
-        fail("ui/index.html 沒有外連任何樣式表 —— 畫面會是瀏覽器預設的裸樣子")
+        fail("ui/index.html links no stylesheet — the screen will render in browser defaults")
     for href in sheets:
         if "//" in href:
-            fail(f"樣式表指向外部來源:{href} —— CSP 只允許 'self',且模組必須離線可用")
+            fail(f"stylesheet points at a remote origin: {href} — CSP allows 'self' only, and modules must work offline")
             continue
         sheet = MODULE / "ui" / href.lstrip("./")
         if not sheet.is_file():
-            fail(f"外連的樣式表不存在:{href}")
+            fail(f"linked stylesheet does not exist: {href}")
         elif sheet.stat().st_size < 500:
-            fail(f"外連的樣式表過短,疑似空殼:{href}({sheet.stat().st_size} bytes)")
+            fail(f"linked stylesheet is suspiciously small: {href} ({sheet.stat().st_size} bytes)")
 
-# ── §5 mcp.json 哨兵 ──────────────────────────────────────────────────────
+# ── §5 mcp.json must use the sentinel ─────────────────────────────────────
 mj_path = MODULE / "mcp.json"
 server_names: list[str] = []
 if not mj_path.exists():
-    fail("mcp.json 不存在")
+    fail("mcp.json is missing")
 else:
     mj = json.loads(mj_path.read_text(encoding="utf-8"))
     servers = mj.get("mcpServers", {})
     server_names = list(servers)
     if not server_names:
-        fail("mcp.json 沒有定義任何 server")
+        fail("mcp.json defines no server")
     for sname, spec in servers.items():
         cmd = str(spec.get("command", ""))
         if not cmd.startswith("madcowork:"):
-            fail(f"server {sname!r} 的 command 不是哨兵:{cmd!r} —— 絕對路徑換一台機器就壞")
+            fail(f"server {sname!r} command is not a sentinel: {cmd!r} — an absolute path breaks on the next machine")
         blob = json.dumps(spec, ensure_ascii=False)
         for bad in ("/Users/", "/home/", "C:\\\\", "/opt/homebrew"):
             if bad in blob:
-                fail(f"server {sname!r} 的設定含開發機絕對路徑:{bad}")
+                fail(f"server {sname!r} config contains a developer-machine path: {bad}")
 
-# ── §6 工具名預算 ─────────────────────────────────────────────────────────
-# host 端:server 名消毒後截 24;工具名截到 64 - len(prefix)。
-# 撞名由 host 擋(契約 v1 §6),但長度是自己該先顧的。
+# ── §6 Tool-name budget ───────────────────────────────────────────────────
+# Host side: the server name is sanitised and truncated to 24 chars; the tool
+# name is truncated to 64 - len(prefix). Collisions are the host's job to
+# refuse (contract §6), but the length budget is yours to respect.
 server_py = MODULE / "server.py"
 if server_py.exists() and server_names:
     src = server_py.read_text(encoding="utf-8")
@@ -143,63 +153,71 @@ if server_py.exists() and server_names:
         budget = 64 - len(prefix)
         over = sorted({t for t in tools if len(t) > budget})
         if over:
-            fail(f"工具名超出預算(server {sname!r} → 上限 {budget}):{', '.join(over)}")
+            fail(f"tool names exceed the budget (server {sname!r} → limit {budget}): {', '.join(over)}")
         elif tools:
             longest = max(tools, key=len)
             head = budget - len(longest)
             if head < 4:
-                warn(f"工具名餘裕僅 {head} 字元(最長 {longest})—— 之後加工具容易超出")
+                warn(f"only {head} characters of headroom left (longest is {longest}) — adding tools later will overflow")
 
-# ── §7 資料不得寫進模組目錄 ────────────────────────────────────────────────
+# ── §7 Data must not be written into the module directory ─────────────────
 if server_py.exists():
     src = server_py.read_text(encoding="utf-8")
     if "module-data" not in src:
-        warn("server.py 未提及 module-data —— 資料應存 ~/.madcowork/module-data/<name>/")
+        warn("server.py never mentions module-data — data belongs in ~/.madcowork/module-data/<name>/")
     if re.search(r'Path\(__file__\)[^\n]*\.(write_text|open\([^)]*[wa])', src):
-        fail("server.py 疑似寫入模組目錄 —— 移除模組時資料會一起消失")
+        fail("server.py appears to write into the module directory — that data disappears when the module is removed")
 
-# ── §2 skills/ 已於 2026-08-16 解禁,改驗「寫對了沒」──────────────────────
-# 舊規則是「不得含 skills/」,理由是 host 只看 enabled 不看 trusted。
-# host 側已修(trustedPluginSkillDirs),禁令解除 —— 但換來一個新的失敗模式:
+# ── §2 skills/ are allowed; check they are written correctly ───────────────
+# The old rule banned skills/ entirely, because the host filtered on `enabled`
+# rather than `trusted`. The host now filters on trust, so the ban is lifted —
+# but it brings a new failure mode:
 #
-#   模型在工具清單裡看到的不是裸名 `mail_create_draft`,
-#   而是 `mcp__<server 名消毒截 24>__mail_create_draft`。
-#   skill 裡只寫裸名,模型就找不到那個工具 —— 而失效的樣子是「模型不理你的模組」,
-#   沒有錯誤訊息,查起來很難。
+#   The model does not see the bare name `mail_create_draft`. It sees
+#   `mcp__<sanitised server, 24 chars>__mail_create_draft`.
+#   A skill that names only the bare tool sends the model looking for something
+#   that does not exist — and that failure looks exactly like "the model
+#   ignores my module", with no error message anywhere.
 SKILL_DIR = MODULE / "skills"
 if SKILL_DIR.exists():
     skill_files = sorted(SKILL_DIR.rglob("*.md"))
     if not skill_files:
-        fail("有 skills/ 目錄卻沒有任何 .md —— 空目錄會讓 host 認為你宣告了 skill 能力")
+        fail("skills/ exists but contains no .md — an empty directory still makes the host think you declare a skill capability")
 
-    # 從 server.py 取真正註冊的工具名。
+    # Read the tool names actually registered in server.py.
     #
-    # ⚠️ 這裡不能只認一種寫法。2026-08-18 實測三個模組:
-    #   madcowork-mail        "name": "mail_doctor",        (spec dict)
-    #   quotation-suite       tool("quotation_doctor", …)   (builder 函式)
-    #   兩者都另有 dispatch 字典 "xxx_yyy": handler
-    # 我原本只認第一種,結果對另外兩個模組抓到 0 個工具,
-    # 於是把「我讀不到」誤報成「你的工具都不存在」—— 13 條與 15 條誣告。
-    # 一個誤判的檢查器比沒有檢查器更糟:它會讓人去修本來就對的東西。
+    # ⚠️ Do not recognise only one style. Three real modules declare tools three
+    # different ways:
+    #   "name": "mail_doctor",        (spec dict)
+    #   tool("quotation_doctor", …)   (builder function)
+    #   "xxx_yyy": handler            (dispatch dict)
+    # An earlier version recognised only the first, found zero tools in the
+    # other two modules, and then reported "none of your tools exist" for every
+    # tool mentioned in their skills — dozens of false accusations.
+    # **A checker that misjudges is worse than no checker: it sends people to
+    # fix things that were never broken.**
     def extract_tools(src: str) -> set[str]:
         pats = (
             r'"name":\s*"([a-z][a-z0-9_]*)"',            # spec dict
-            r'\btool\(\s*"([a-z][a-z0-9_]*)"',            # builder 函式
-            r'^\s*"([a-z][a-z0-9_]*)"\s*:\s*[A-Za-z_]',   # dispatch 字典
+            r'\btool\(\s*"([a-z][a-z0-9_]*)"',            # builder function
+            r'^\s*"([a-z][a-z0-9_]*)"\s*:\s*[A-Za-z_]',   # dispatch dict
         )
         found: set[str] = set()
         for pat in pats:
             found |= set(re.findall(pat, src, re.M))
-        # 只留看起來像工具名的(有底線、且不是明顯的資料欄位)
+        # Keep only things shaped like tool names (they contain an underscore)
         return {f for f in found if "_" in f}
 
     declared_tools = extract_tools(server_py.read_text(encoding="utf-8")) if server_py.exists() else set()
 
-    # 讀不到就明講讀不到,不要反過來指控模組。
+    # If the declarations cannot be read, say so — never turn that into an
+    # accusation against the module.
     tools_readable = bool(declared_tools)
     if server_py.exists() and not tools_readable:
-        fail("無法從 server.py 辨識任何工具宣告 —— **這是檢查器讀不懂你的寫法,不是你的工具不存在**。"
-             "skill 的工具名比對本輪略過;請回報你的宣告方式,以便補進 extract_tools()")
+        fail("could not recognise any tool declaration in server.py — **this "
+             "means the checker cannot read your style, not that your tools are "
+             "missing**. Skill tool-name matching was skipped; please report how "
+             "you declare tools so it can be added to extract_tools()")
     wrapped = {}
     for sname in server_names:
         san = re.sub(r"[^a-zA-Z0-9_-]", "_", sname)[:24] or "server"
@@ -210,67 +228,80 @@ if SKILL_DIR.exists():
     for f in skill_files:
         text = f.read_text(encoding="utf-8", errors="replace")
         if not text.lstrip().startswith("---"):
-            fail(f"{f.relative_to(MODULE)} 缺 YAML frontmatter —— host 靠它取 name 與 description")
-        # skill 提到的每個看起來像本模組工具的名字,都必須存在。
+            fail(f"{f.relative_to(MODULE)} has no YAML frontmatter — the host reads name and description from it")
+        # Every token in the skill that looks like one of this module's tools
+        # must actually exist.
         #
-        # ⚠️ 但「看起來像」是近似規則,而近似規則的誤判方向永遠是誣告。
-        # 2026-08-21:`hpc_env.json`(設定檔名)被判成「不存在的工具 hpc_env」。
-        # 所以先把明顯不是工具的形態排除:帶副檔名的、或出現在路徑中的。
-        # **守衛寧可漏也不要誣告** —— 漏掉的人會自己發現,被誣告的人會去改對的東西。
+        # ⚠️ "Looks like" is a heuristic, and a heuristic's errors always run in
+        # the direction of false accusation. A real case: `hpc_env.json` (a
+        # config filename) was reported as "nonexistent tool hpc_env" because it
+        # starts with a known prefix. So exclude the obviously-not-a-tool shapes
+        # first: anything carrying a file extension, or sitting inside a path.
+        # **A guard should miss rather than accuse** — someone who is missed
+        # finds out eventually; someone falsely accused goes and changes
+        # something that was already correct.
         NOT_A_TOOL = re.compile(r"[a-z][a-z0-9_]*\.(json|md|py|js|sh|txt|ya?ml|db|sqlite3?)\b|/[a-z0-9_.-]*")
         non_tool_spans = {m.group(0) for m in NOT_A_TOOL.finditer(text)}
         for mentioned in set(re.findall(r"\b([a-z][a-z0-9]*_[a-z0-9_]+)\b", text)):
             if any(mentioned in span for span in non_tool_spans):
-                continue  # 是檔名或路徑的一部分,不是工具
+                continue  # part of a filename or a path, not a tool
             if mentioned in declared_tools:
                 if wrapped.get(mentioned) and wrapped[mentioned] not in text:
-                    fail(f"{f.relative_to(MODULE)} 提到裸工具名 {mentioned!r},"
-                         f"但模型看到的是 {wrapped[mentioned]!r} —— 請補上 wrapped 名,否則模型找不到")
+                    fail(f"{f.relative_to(MODULE)} names the bare tool {mentioned!r}, "
+                         f"but the model sees {wrapped[mentioned]!r} — write the wrapped "
+                         f"name or the model will not find it")
             elif tools_readable and mentioned.startswith(tuple(f"{t.split('_')[0]}_" for t in declared_tools) or ("\0",)):
-                fail(f"{f.relative_to(MODULE)} 提到 {mentioned!r},但 server.py 沒有註冊這個工具 —— "
-                     f"skill 指向不存在的工具,模型會照著叫然後失敗")
+                fail(f"{f.relative_to(MODULE)} mentions {mentioned!r}, but server.py "
+                     f"registers no such tool — the model will call it and fail")
 
-        # wrapped 形式必須單獨掃 —— 上面那個 regex 看不到它。
-        # `mcp__srv__mail_missing` 裡 `mail_missing` 前面是底線(word char),
-        # `\b` 不成立,所以整串 wrapped 名對上面的迴圈是隱形的。
-        # Codex 2026-08-16 反測:把 `__mail_doctor` 改成 `__mail_missing` 仍 0 FAIL。
-        # 我原本的突變測試用的是裸名,剛好落在 regex 抓得到的那一類 ——
-        # 證明了一種輸入會響,就當成整類都會響。
+        # The wrapped form needs its own scan — the regex above cannot see it.
+        # In `mcp__srv__mail_missing` the character before `mail_missing` is an
+        # underscore, which is a word character, so `\b` never matches and the
+        # whole wrapped name is invisible to that loop.
+        # Found by a counter-test: changing `__mail_doctor` to `__mail_missing`
+        # still produced 0 FAIL. The original mutation test used a *bare* name,
+        # which happens to be the class the regex does catch — proving one input
+        # goes red and assuming the whole class does.
         valid_prefixes = {re.sub(r"[^a-zA-Z0-9_-]", "_", s)[:24] or "server" for s in server_names}
         for srv, tool in set(re.findall(r"mcp__([A-Za-z0-9_-]+)__([a-z][a-z0-9_]*)", text)):
             if srv not in valid_prefixes:
-                fail(f"{f.relative_to(MODULE)} 的 wrapped 名 server 段是 {srv!r},"
-                     f"但 mcp.json 產生的是 {sorted(valid_prefixes)} —— 模型會找不到")
+                fail(f"{f.relative_to(MODULE)} wrapped name uses server segment {srv!r}, "
+                     f"but mcp.json produces {sorted(valid_prefixes)} — the model will not find it")
             elif tools_readable and tool not in declared_tools:
-                fail(f"{f.relative_to(MODULE)} 的 wrapped 名指向 {tool!r},"
-                     f"但 server.py 沒有註冊它 —— 模型會照著叫然後失敗")
+                fail(f"{f.relative_to(MODULE)} wrapped name points at {tool!r}, "
+                     f"but server.py does not register it — the model will call it and fail")
 
-# ── §11 執行期不變式:要嘛有,要嘛明講為什麼沒有 ───────────────────────────
-# 靈感來自 DeepSeek Harness 的 verify-package-invariants(2026-08-15 研究)。
+# ── §10 Runtime invariant: have one, or say why you do not ────────────────
 #
-# 關鍵不是「有沒有宣告」,是**reporter 到底會不會跑**。只檢查檔案存在與函式有
-# 定義,會複製我們自己犯過的錯:一個從未被呼叫的守衛,跟沒有守衛一樣 ——
-# 而且更糟,因為它會回報安全。所以這裡**實際 import 並呼叫**它一次。
-EMPTY_REASONS = {"n/a", "na", "無", "none", "無需", "不需要", "-", "尚未", "todo"}
+# What matters is not whether one is declared but **whether the reporter
+# actually runs**. Checking only that the file exists and the function is
+# defined repeats a mistake worth naming: a guard that is never called is no
+# different from no guard — and worse, because it reports safety. So this
+# **imports and calls it** once, for real.
+# Non-English entries are deliberate: an author writing "none: 無" is giving an
+# empty excuse in their own language, and the check should catch that too.
+EMPTY_REASONS = {"n/a", "na", "none", "-", "todo", "tbd",
+                 "無", "無需", "不需要", "尚未", "なし", "없음"}
 inv = pj.get("runtimeInvariant")
 if inv is None:
-    fail("plugin.json 缺 runtimeInvariant —— 要嘛聲明一條執行期不變式,要嘛明講為什麼沒有")
+    fail("plugin.json has no runtimeInvariant — declare one, or state concretely why this module has none")
 elif isinstance(inv, str):
     if not inv.startswith("none:"):
-        fail(f"runtimeInvariant 若為字串必須以 'none:' 開頭並附理由,實得:{inv!r}")
+        fail(f"runtimeInvariant as a string must start with 'none:' and give a reason, got: {inv!r}")
     else:
         reason = inv[len("none:"):].strip()
         if len(reason) < 20 or reason.lower().rstrip("。.") in EMPTY_REASONS:
-            fail(f"runtimeInvariant 的『沒有』理由過短或是空話({len(reason)} 字元):{reason!r}")
+            fail(f"the 'none' reason is too short or empty of content ({len(reason)} chars): {reason!r}")
 elif isinstance(inv, dict):
     mod_name, entry = str(inv.get("module", "")), str(inv.get("entry", ""))
     src_file = MODULE / f"{mod_name}.py"
     if not mod_name or not entry:
-        fail("runtimeInvariant 物件需要 module 與 entry 兩個欄位")
+        fail("runtimeInvariant object needs both a module and an entry field")
     elif not src_file.exists():
-        fail(f"runtimeInvariant 指向的檔案不存在:{src_file.name}")
+        fail(f"runtimeInvariant points at a file that does not exist: {src_file.name}")
     else:
-        # 真的跑一次 —— 對一個乾淨的臨時 HOME,證明 reporter 不是空殼
+        # Run it for real against a clean temporary HOME — prove the reporter
+        # is not a shell
         import importlib.util
         import tempfile
         try:
@@ -280,62 +311,64 @@ elif isinstance(inv, dict):
             spec.loader.exec_module(module_obj)
             fn = getattr(module_obj, entry, None)
             if not callable(fn):
-                fail(f"runtimeInvariant 的 entry {entry!r} 不可呼叫")
+                fail(f"runtimeInvariant entry {entry!r} is not callable")
             else:
                 with tempfile.TemporaryDirectory() as tmp:
                     result = fn(Path(tmp))
                 if not isinstance(result, list):
-                    fail(f"{mod_name}.{entry}() 必須回傳 list(失敗描述),實得 {type(result).__name__}")
+                    fail(f"{mod_name}.{entry}() must return a list of failure descriptions, got {type(result).__name__}")
         except Exception as exc:
-            fail(f"執行 {mod_name}.{entry}() 時拋例外 —— 會拋的 reporter 等於沒有:"
-                 f"{type(exc).__name__}: {exc}")
+            fail(f"{mod_name}.{entry}() raised — a reporter that throws is no "
+                 f"reporter at all: {type(exc).__name__}: {exc}")
         finally:
             if str(MODULE) in sys.path:
                 sys.path.remove(str(MODULE))
 else:
-    fail(f"runtimeInvariant 型別不合法:{type(inv).__name__}")
+    fail(f"runtimeInvariant has an invalid type: {type(inv).__name__}")
 
-# ── §12 Known Limitations:把做不到的事寫出來 ──────────────────────────────
-# 樂觀的註解會被當成保證。DeepSeek 用 CI 閘門逼每個 package 寫,效果是他們敢寫
-# 「我們的 workflow 沙箱不是真沙箱」這種話。
+# ── §11 Known Limitations: write down what you cannot do ──────────────────
+# An optimistic silence is read downstream as a guarantee. Making this a gate
+# is what gives authors permission to write the uncomfortable sentence —
+# "our sandbox is not a real sandbox" — instead of leaving it unsaid.
 kl = pj.get("knownLimitations")
 readme = MODULE / "README.md"
 if isinstance(kl, str) and kl.startswith("none:"):
     reason = kl[len("none:"):].strip()
     if len(reason) < 20 or reason.lower().rstrip("。.") in EMPTY_REASONS:
-        fail(f"knownLimitations 的『沒有』理由過短或是空話:{reason!r}")
+        fail(f"the knownLimitations 'none' reason is too short or empty of content: {reason!r}")
 elif not readme.exists():
-    fail("缺 module/README.md —— Known Limitations 沒有地方寫")
+    fail("module/README.md is missing — there is nowhere to state Known Limitations")
 else:
     text = readme.read_text(encoding="utf-8", errors="replace")
-    # 中英文都認 —— 契約的受眾兩種都有,只認英文會對中文 README 產生假紅燈
-    # (2026-08-15 實測:本模組原本就有 `## 已知限制`,是閘門寫窄了)
+    # Accept the heading in several languages. Recognising English only raises
+    # a false alarm against a perfectly good README written in another one —
+    # measured: a module already had `## 已知限制` and the gate was too narrow.
     m = re.search(r"^##+\s*(Known Limitations|已知限制|既知の制限)\b.*$", text, re.M)
     if not m:
-        fail("module/README.md 缺 `## Known Limitations` / `## 已知限制` 段落 —— "
-             "沒有限制要在 plugin.json 標 knownLimitations: 'none: <理由>'")
+        fail("module/README.md has no `## Known Limitations` section — if there "
+             "genuinely are none, declare knownLimitations: 'none: <reason>' in plugin.json")
     else:
         rest = text[m.end():]
         nxt = re.search(r"^##+\s", rest, re.M)
         body = rest[:nxt.start()] if nxt else rest
         items = [b.strip()[2:].strip() for b in body.splitlines() if b.strip().startswith("- ")]
         if not items:
-            fail("`## Known Limitations` 段落是空的 —— 空標題比沒有標題更糟,它看起來像已經想過")
+            fail("the `## Known Limitations` section is empty — an empty heading is worse than none, because it reads as though the question was considered")
         else:
             short = [i for i in items if len(i) < 15]
             if short:
-                fail(f"Known Limitations 有過短的條目(<15 字元):{short[:2]}")
+                fail(f"Known Limitations entries are too short to say anything (<15 chars): {short[:2]}")
 
-# ── 秘密掃描(排除 Python secrets 模組這類誤報)─────────────────────────────
+# ── Secret scan (the Python `secrets` module is a known false positive) ────
 SECRET = re.compile(r'(api[_-]?key|password|client[_-]?secret)\s*[:=]\s*["\'][^"\']{8,}', re.I)
 for f in MODULE.rglob("*"):
     if f.is_file() and f.suffix in {".py", ".json", ".js", ".html", ".md"}:
         for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if SECRET.search(line):
-                fail(f"疑似寫死的秘密:{f.relative_to(MODULE)}:{i}")
+                fail(f"possible hard-coded secret: {f.relative_to(MODULE)}:{i}")
 
-# ── 結果 ──────────────────────────────────────────────────────────────────
-print(f"模組契約檢查:{name or MODULE.name}")
+# ── Result ────────────────────────────────────────────────────────────────
+print(f"Module contract check: {name or MODULE.name}")
 for w in warns:
     print(f"  WARN  {w}")
 for f_ in fails:

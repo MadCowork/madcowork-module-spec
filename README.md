@@ -94,9 +94,14 @@ directory — that directory disappears when the module is removed.
 | ❌ Read the user's credentials | The stdio environment is an allowlist; the vault key is not in it |
 | ❌ Run on install | Installed means `enabled + untrusted`. Nothing of yours executes until a person presses Trust |
 
-These are not restrictions we expect you to respect voluntarily. **The host
-enforces them.** Where this contract says "must", the host rejects packages that
-do not — it does not rely on authors being careful.
+These are not restrictions we expect you to respect voluntarily. The host
+enforces the runtime gates itself: trust, capabilities, manifest shape and
+`minimumHostVersion` are checked at install and on every launch, and an
+untrusted module never runs. The remaining "must" rules of this contract are
+enforced by the checker — run it in CI. Shipping that same checker inside the
+host (`madcowork plugin check`) is planned, not yet released; until then the
+host does not re-validate every contract rule at install time, so the checker
+is the gate.
 
 ## Documents
 
@@ -108,10 +113,12 @@ do not — it does not rely on authors being careful.
 
 ## Versioning
 
-The contract is versioned. `plugin.json` declares `moduleApiVersion` (what
-contract you built against) and `minimumHostVersion` (the oldest MadCowork that
-can run you). The host reads both and refuses installs it cannot honour, so a
-user never ends up with a module that fails mysteriously on their machine.
+The contract is versioned. `plugin.json` declares `moduleApiVersion` (the
+contract you built against — required by the checker) and `minimumHostVersion`
+(the oldest MadCowork that can run you — enforced by the host, which refuses to
+install a module that needs a newer host than it is). The host does not yet act
+on `moduleApiVersion`; it exists so the checker, and future hosts, can detect
+contract drift instead of failing mysteriously on a user's machine.
 
 ## License
 

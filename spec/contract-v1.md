@@ -36,7 +36,8 @@ your-module/
 Pack it into one file:
 
 ```sh
-madcowork plugin pack your-module/    # → <name>-<version>-universal.mcpkg
+madcowork plugin pack your-module/    # → <name>.mcpkg in the current directory
+# Publish it as <name>-<version>.mcpkg so users can tell versions apart.
 ```
 
 ### 2.1 Skills are allowed, and they must name tools the way the model sees them

@@ -20,16 +20,34 @@ your-module/
 ```
 
 ```sh
-madcowork plugin pack your-module/      # → your-module-0.1.0-universal.mcpkg
+madcowork plugin pack your-module/      # → your-module.mcpkg (in your current directory)
 ```
 
 That single `.mcpkg` is the whole delivery.
+
+> **Only have the packaged app?** There is no `madcowork` on your PATH yet — the
+> CLI lives inside the app bundle. Use the full path (adjust the app name to
+> what is in your `/Applications`):
+>
+> ```sh
+> ELECTRON_RUN_AS_NODE=1 \
+>   "/Applications/MadCowork.app/Contents/MacOS/madcowork-api" \
+>   "/Applications/MadCowork.app/Contents/Resources/app/server/cli.mjs" \
+>   plugin pack your-module/
+> ```
 
 ## Check your module before anyone installs it
 
 ```sh
 python3 tools/check_contract.py path/to/your-module
 ```
+
+> No Python on your machine? MadCowork bundles one — use it directly:
+>
+> ```sh
+> "/Applications/MadCowork.app/Contents/Resources/runtime/python/bin/python3.11" \
+>   tools/check_contract.py path/to/your-module
+> ```
 
 The checker enforces what this contract requires, and it is the same one the
 reference module runs in its own CI. **Run it yourself — do not wait for a user

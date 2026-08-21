@@ -9,8 +9,11 @@ not about the skeleton.
 
 ```sh
 python3 ../tools/check_contract.py .     # 0 FAIL / 0 WARN
-madcowork plugin pack .                  # → example-module-0.1.0-universal.mcpkg
+madcowork plugin pack .                  # → example-module.mcpkg (in your current directory)
 ```
+
+No `python3` or `madcowork` on your PATH? Both live inside the app bundle —
+see the main [README](../README.md) for the full-path forms.
 
 ## What to change first
 

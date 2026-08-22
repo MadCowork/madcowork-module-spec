@@ -359,7 +359,7 @@ else:
             if short:
                 fail(f"Known Limitations entries are too short to say anything (<15 chars): {short[:2]}")
 
-# ── Declared capabilities (§3b) and the panel channel (§11b) ──────────────
+# ── Declared entry points (§3b) and the panel channel (§11b) ─────────────
 # The module names its entry points and this verifies the names resolve. It
 # used to infer the channel from tool-name suffixes and got it wrong twice in
 # one day — a builder-style module was told it had no channel, and correctly
@@ -371,9 +371,9 @@ if server_py.exists():
     spec_style = re.findall(r'"name":\s*"([a-z0-9_]+)"', src_text)
     builder_style = re.findall(r'\btool\(\s*"([a-z0-9_]+)"', src_text)
     tool_names = set(spec_style) | set(builder_style)
-    caps = pj.get("capabilities")
+    caps = pj.get("entryPoints")
     if caps is not None and not isinstance(caps, dict):
-        fail("capabilities must be an object (§3b)")
+        fail("entryPoints must be an object (§3b)")
         caps = {}
     caps = caps or {}
 
@@ -383,16 +383,16 @@ if server_py.exists():
         if block is None:
             continue
         if not isinstance(block, dict):
-            fail(f"capabilities.{group} must be an object naming your tools (§3b)")
+            fail(f"entryPoints.{group} must be an object naming your tools (§3b)")
             continue
         for key in keys:
             value = block.get(key)
             if value is None:
                 if group == "panel":
-                    fail(f"capabilities.panel is declared without `{key}` — name all three, or none (§11b)")
+                    fail(f"entryPoints.panel is declared without `{key}` — name all three, or none (§11b)")
                 continue
             if not isinstance(value, str) or not value:
-                fail(f"capabilities.{group}.{key} must be the name of one of your tools (§3b)")
+                fail(f"entryPoints.{group}.{key} must be the name of one of your tools (§3b)")
                 continue
             declared.append((f"{group}.{key}", value))
 
@@ -400,16 +400,16 @@ if server_py.exists():
     # shadowing it renamed the module in this script's own report.
     for where, tool_name in declared:
         if tool_name not in tool_names:
-            fail(f"capabilities.{where} names `{tool_name}`, which is not in your tools — "
+            fail(f"entryPoints.{where} names `{tool_name}`, which is not in your tools — "
                  "a declaration that does not resolve is worse than none (§3b)")
 
     if (MODULE / "ui").is_dir():
         if "panel" not in caps:
             warn("this module has a UI but declares no panel channel (§11b): the model "
                  "cannot see or steer what the user is looking at. Vendor template/_panel.py "
-                 "and declare capabilities.panel if you want it.")
+                 "and declare entryPoints.panel if you want it.")
         if "ui" not in caps:
-            warn("this module has a UI but does not declare capabilities.ui.open (§3b): the "
+            warn("this module has a UI but does not declare entryPoints.ui.open (§3b): the "
                  "host cannot offer a button for it and has to hope the model picks the right tool.")
         # The one thing that is dangerous rather than merely undeclared.
         leaked = sorted(n for n in tool_names if n.endswith(("panel_pull", "panel_dismiss")))

@@ -9,7 +9,7 @@
     "module": "invariant",
     "entry": "check"
   },
-  "capabilities": {
+  "entryPoints": {
     "ui": {
       "open": "example_open_ui"
     },

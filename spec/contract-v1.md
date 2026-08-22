@@ -82,7 +82,7 @@ tool makes the skill fail silently — and silent failure here looks exactly lik
   "minimumHostVersion": "0.55.0",
   "repository": "https://github.com/you/your-module",
   "runtimeInvariant": { "module": "invariant", "entry": "check" },
-  "capabilities": {
+  "entryPoints": {
     "ui":    { "open": "yours_open_ui" },
     "panel": { "focus": "yours_panel_focus",
                "note":  "yours_panel_note",
@@ -99,12 +99,15 @@ tool makes the skill fail silently — and silent failure here looks exactly lik
 | `minimumHostVersion` | **The oldest MadCowork you work on.** The host refuses installs below it |
 | `repository` | Where your source lives, so a user can get it |
 | `runtimeInvariant` | See §11 |
-| `capabilities` | **Name your entry points; do not make anyone guess them.** See §3b |
+| `entryPoints` | **Name your entry points; do not make anyone guess them.** See §3b |
 
-### 3b. `capabilities` — say what you offer, by name
+### 3b. `entryPoints` — say what you offer, by name
 
 Optional, and worth writing. Each entry names a tool of yours, so the host and
-the checker read a fact instead of inferring one:
+the checker read a fact instead of inferring one. It is called `entryPoints`
+and not `capabilities` because the host already reports a `capabilities`
+object of its own for every plugin — skills, hooks, mcp — computed from what
+it finds in the package. Two different things must not share one word.
 
 | Key | Meaning |
 |---|---|

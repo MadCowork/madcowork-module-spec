@@ -326,9 +326,30 @@ your page:
 
 Four rules the host expects you to keep:
 
-1. **`pull` and `dismiss` never appear in `tools/list`.** They are the page's
-   plumbing. A model that can clear its own cards, or impersonate the page's
-   report, has been handed a way to lie about what the user saw.
+1. **`pull` and `dismiss` never appear in `tools/list` — and your dispatch
+   must enforce that, not merely observe it.** They are the page's plumbing;
+   a model that can clear its own cards, or impersonate the page's report,
+   has been handed a way to lie about what the user saw.
+
+   Absent from `tools/list` is **not** the same as unreachable. If your
+   `handle()` dispatches on the same table your page uses, a model that
+   simply names the handler gets it executed. That is not hypothetical: it
+   was live in madcowork-hpc until it was measured — naming `hpc_panel_pull`
+   over MCP returned a happy result and planted a panel state that never
+   happened. Gate the model's dispatch on what the model can see:
+
+   ```python
+   MODEL_TOOLS = {entry["name"] for entry in TOOLS}   # after every TOOLS edit
+
+   def handle(name, args):
+       if name not in MODEL_TOOLS:                    # not `in HANDLERS`
+           raise ValueError(f"unknown tool: {name}")
+       return HANDLERS[name](args)
+   ```
+
+   The same applies to every workbench-only handler you have — logins,
+   destructive buttons, preference writes. The checker cannot see this for
+   you: it reads declarations, and this is a property of your dispatch.
 2. **A card says who wrote it.** Model prose sitting unmarked next to
    measured numbers is the worst outcome this feature has. `_panel.py`
    records an author; your UI must show it.

@@ -120,11 +120,18 @@ HANDLERS = {
     "example_open_ui": tool_open_ui,
 }
 
+# What the model may call: exactly what it can see. HANDLERS also carries
+# the page's own entry points, so dispatching on it would make "not in
+# tools/list" a convention with nothing enforcing it — see §11b.
+MODEL_TOOLS = {entry["name"] for entry in TOOLS}
+_orphans = MODEL_TOOLS - set(HANDLERS)
+assert not _orphans, f"declared tools with no handler: {sorted(_orphans)}"
+
+
 def handle(name: str, args: dict):
-    fn = HANDLERS.get(name)
-    if fn is None:
+    if name not in MODEL_TOOLS:
         raise ValueError(f"unknown tool: {name}")
-    return fn(args or {})
+    return HANDLERS[name](args or {})
 
 
 if __name__ == "__main__":

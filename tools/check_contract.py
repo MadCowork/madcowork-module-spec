@@ -359,6 +359,29 @@ else:
             if short:
                 fail(f"Known Limitations entries are too short to say anything (<15 chars): {short[:2]}")
 
+# ── Panel channel (§11b) — a nudge, never a failure ───────────────────────
+# A module with a screen but no channel is a dashboard: the model cannot see
+# what the user sees. That is a design choice, not a contract breach, so this
+# only ever warns. It also catches the one thing that IS dangerous: exposing
+# the page's own plumbing to the model.
+if (MODULE / "ui").is_dir() and server_py.exists():
+    # MODEL-VISIBLE names only. Two wrong sets were tried first: `tools` sees
+    # just the spec-dict style, so a builder-style module gets told it has no
+    # channel while three sit in its TOOLS list; `declared_tools` also folds
+    # in the dispatch dict, so correctly hidden plumbing gets reported as
+    # leaked. Both are the same failure — the checker accusing code that is
+    # already right. What goes in TOOLS is what the model can see:
+    src_text = server_py.read_text(encoding="utf-8")
+    spec_style = re.findall(r'"name":\s*"([a-z0-9_]+)"', src_text)
+    builder_style = re.findall(r'\btool\(\s*"([a-z0-9_]+)"', src_text)
+    tool_names = set(spec_style) | set(builder_style)
+    if not any(name.endswith(("panel_state", "panel_focus", "panel_note")) for name in tool_names):
+        warn("this module has a UI but no panel channel (§11b): the model cannot see or "
+             "steer what the user is looking at. Vendor template/_panel.py if you want it.")
+    leaked = sorted(n for n in tool_names if n.endswith(("panel_pull", "panel_dismiss")))
+    if leaked:
+        fail(f"panel plumbing must not be model-visible (§11b): {leaked}")
+
 # ── Secret scan (the Python `secrets` module is a known false positive) ────
 SECRET = re.compile(r'(api[_-]?key|password|client[_-]?secret)\s*[:=]\s*["\']([^"\']{8,})', re.I)
 # A UI label is not a credential. `loginPassword: "Password"` and its nine

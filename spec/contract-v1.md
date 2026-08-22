@@ -305,6 +305,45 @@ considered when it was not.
 > An optimistic silence is read downstream as a guarantee. A limitation you
 > wrote down is an honest interface.
 
+## 11b. The panel channel: be agent-driven, not a dashboard
+
+A module with tools and a screen still has two pipes that never meet. The
+model reads your data and can open your screen, but cannot see what is on it
+or change it; the person looking at the screen cannot hand anything back.
+Ship a **panel channel** and they meet.
+
+`template/_panel.py` is the reference implementation — vendor it, don't
+reinvent it. It gives you three model-facing calls and two that belong to
+your page:
+
+| Call | Who uses it | What it does |
+|---|---|---|
+| `focus({tab})` | the model | points the panel at a tab, so the user sees what is being discussed |
+| `note({title, lines, level})` | the model | puts a card at the top of the panel |
+| `state({})` | the model | reports which tab the user is on, and whether the panel is open at all |
+| `pull({state})` | your page | fetches pending focus/cards and reports what it is showing |
+| `dismiss({})` | your page | clears the cards |
+
+Four rules the host expects you to keep:
+
+1. **`pull` and `dismiss` never appear in `tools/list`.** They are the page's
+   plumbing. A model that can clear its own cards, or impersonate the page's
+   report, has been handed a way to lie about what the user saw.
+2. **A card says who wrote it.** Model prose sitting unmarked next to
+   measured numbers is the worst outcome this feature has. `_panel.py`
+   records an author; your UI must show it.
+3. **Focus is one-shot.** Replayed on every poll it fights the user for the
+   tab they just chose.
+4. **The poll is local and free.** It must not trigger a backend call, a
+   network request or anything a remote site would count as load. A channel
+   that costs something per tick is a channel people switch off — and on a
+   shared cluster it is a channel that gets your account talked about.
+
+The reverse direction — your page speaking to the chat, so a user can point
+at a row and ask about it — is not yours to build: it needs a host bridge,
+and it is not available yet. Design your panel so that the model writing a
+card is a useful half of the loop on its own.
+
 ## 12. Text you return to the model is data, not instructions
 
 1. **Your `skills/` are the one declared instruction channel.** The host

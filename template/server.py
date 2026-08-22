@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 
 from _local_ui import LocalUiServer
+from _panel import PanelChannel
 from _mcp_runtime import McpServer
 
 MAD_HOME = Path(__file__).resolve().parents[2]
@@ -62,9 +63,17 @@ def tool_list_notes(args: dict) -> dict:
     return {"notes": [dict(r) for r in rows]}
 
 
+# The panel channel makes this module agent-driven rather than a dashboard:
+# the model can point the screen somewhere, write a card on it, and ask what
+# the user is looking at. `pull` and `dismiss` belong to the page, never to
+# the model — keep them out of TOOLS.
+PANEL = PanelChannel(tabs=("notes", "about"))
+
 UI = LocalUiServer("example-module", Path(__file__).resolve().parent / "ui", {
     "list_notes": tool_list_notes,
     "add_note": tool_add_note,
+    "panel_pull": PANEL.pull,
+    "panel_dismiss": PANEL.dismiss,
 })
 
 
@@ -83,6 +92,19 @@ TOOLS = [
     {"name": "example_list_notes",
      "description": "List every stored note, newest first.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "example_panel_focus",
+     "description": "Point the open panel at one of its tabs, so the user sees what you are talking about.",
+     "inputSchema": {"type": "object", "properties": {"tab": {"type": "string", "enum": ["notes", "about"]}}}},
+    {"name": "example_panel_note",
+     "description": "Put a card at the top of the panel with your reading of what is there. Shown labelled as written by the model.",
+     "inputSchema": {"type": "object",
+                     "properties": {"title": {"type": "string"},
+                                    "lines": {"type": "array", "items": {"type": "string"}},
+                                    "level": {"type": "string", "enum": ["info", "warn", "danger", "ok"]}},
+                     "required": ["title"]}},
+    {"name": "example_panel_state",
+     "description": "See what the panel is showing right now, and whether it is open at all.",
+     "inputSchema": {"type": "object", "properties": {}}},
     {"name": "example_open_ui",
      "description": "Open the notes workbench in MadCowork's browser panel.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -92,6 +114,9 @@ HANDLERS = {
     "example_doctor": tool_doctor,
     "example_add_note": tool_add_note,
     "example_list_notes": tool_list_notes,
+    "example_panel_focus": PANEL.focus,
+    "example_panel_note": PANEL.note,
+    "example_panel_state": PANEL.state,
     "example_open_ui": tool_open_ui,
 }
 

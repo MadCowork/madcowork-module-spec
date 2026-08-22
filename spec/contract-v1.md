@@ -81,7 +81,13 @@ tool makes the skill fail silently — and silent failure here looks exactly lik
   "moduleApiVersion": 1,
   "minimumHostVersion": "0.55.0",
   "repository": "https://github.com/you/your-module",
-  "runtimeInvariant": { "module": "invariant", "entry": "check" }
+  "runtimeInvariant": { "module": "invariant", "entry": "check" },
+  "capabilities": {
+    "ui":    { "open": "yours_open_ui" },
+    "panel": { "focus": "yours_panel_focus",
+               "note":  "yours_panel_note",
+               "state": "yours_panel_state" }
+  }
 }
 ```
 
@@ -93,6 +99,26 @@ tool makes the skill fail silently — and silent failure here looks exactly lik
 | `minimumHostVersion` | **The oldest MadCowork you work on.** The host refuses installs below it |
 | `repository` | Where your source lives, so a user can get it |
 | `runtimeInvariant` | See §11 |
+| `capabilities` | **Name your entry points; do not make anyone guess them.** See §3b |
+
+### 3b. `capabilities` — say what you offer, by name
+
+Optional, and worth writing. Each entry names a tool of yours, so the host and
+the checker read a fact instead of inferring one:
+
+| Key | Meaning |
+|---|---|
+| `ui.open` | The tool that opens your screen. The host can put a button on it — no model, no routing, no guessing which of your tools is the panel one |
+| `panel.focus` / `panel.note` / `panel.state` | Your panel channel (§11b) |
+
+Every name here must appear in `tools/list`; the checker fails you if it does
+not, because a declaration that does not resolve is worse than no declaration.
+
+Why this exists: the checker used to infer the panel channel from tool-name
+suffixes, and it was wrong twice in a day — telling a builder-style module it
+had no channel, and reporting correctly hidden plumbing as leaked. A heuristic
+that misjudges sends authors to "fix" code that is already right. So the
+module states it and the checker verifies the statement.
 
 ## 4. The screen is required, not optional
 

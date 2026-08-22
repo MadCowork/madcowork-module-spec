@@ -5,5 +5,18 @@
   "moduleApiVersion": 1,
   "minimumHostVersion": "0.55.0",
   "repository": "https://github.com/YOUR-NAME/example-module",
-  "runtimeInvariant": {"module": "invariant", "entry": "check"}
+  "runtimeInvariant": {
+    "module": "invariant",
+    "entry": "check"
+  },
+  "capabilities": {
+    "ui": {
+      "open": "example_open_ui"
+    },
+    "panel": {
+      "focus": "example_panel_focus",
+      "note": "example_panel_note",
+      "state": "example_panel_state"
+    }
+  }
 }

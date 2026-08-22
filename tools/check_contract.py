@@ -359,28 +359,62 @@ else:
             if short:
                 fail(f"Known Limitations entries are too short to say anything (<15 chars): {short[:2]}")
 
-# ── Panel channel (§11b) — a nudge, never a failure ───────────────────────
-# A module with a screen but no channel is a dashboard: the model cannot see
-# what the user sees. That is a design choice, not a contract breach, so this
-# only ever warns. It also catches the one thing that IS dangerous: exposing
-# the page's own plumbing to the model.
-if (MODULE / "ui").is_dir() and server_py.exists():
-    # MODEL-VISIBLE names only. Two wrong sets were tried first: `tools` sees
-    # just the spec-dict style, so a builder-style module gets told it has no
-    # channel while three sit in its TOOLS list; `declared_tools` also folds
-    # in the dispatch dict, so correctly hidden plumbing gets reported as
-    # leaked. Both are the same failure — the checker accusing code that is
-    # already right. What goes in TOOLS is what the model can see:
+# ── Declared capabilities (§3b) and the panel channel (§11b) ──────────────
+# The module names its entry points and this verifies the names resolve. It
+# used to infer the channel from tool-name suffixes and got it wrong twice in
+# one day — a builder-style module was told it had no channel, and correctly
+# hidden plumbing was reported as leaked. A heuristic that misjudges sends
+# authors to "fix" what is already right, so the only guessing left is the
+# nudge for modules that declared nothing at all.
+if server_py.exists():
     src_text = server_py.read_text(encoding="utf-8")
     spec_style = re.findall(r'"name":\s*"([a-z0-9_]+)"', src_text)
     builder_style = re.findall(r'\btool\(\s*"([a-z0-9_]+)"', src_text)
     tool_names = set(spec_style) | set(builder_style)
-    if not any(name.endswith(("panel_state", "panel_focus", "panel_note")) for name in tool_names):
-        warn("this module has a UI but no panel channel (§11b): the model cannot see or "
-             "steer what the user is looking at. Vendor template/_panel.py if you want it.")
-    leaked = sorted(n for n in tool_names if n.endswith(("panel_pull", "panel_dismiss")))
-    if leaked:
-        fail(f"panel plumbing must not be model-visible (§11b): {leaked}")
+    caps = pj.get("capabilities")
+    if caps is not None and not isinstance(caps, dict):
+        fail("capabilities must be an object (§3b)")
+        caps = {}
+    caps = caps or {}
+
+    declared: list[tuple[str, str]] = []
+    for group, keys in (("ui", ("open",)), ("panel", ("focus", "note", "state"))):
+        block = caps.get(group)
+        if block is None:
+            continue
+        if not isinstance(block, dict):
+            fail(f"capabilities.{group} must be an object naming your tools (§3b)")
+            continue
+        for key in keys:
+            value = block.get(key)
+            if value is None:
+                if group == "panel":
+                    fail(f"capabilities.panel is declared without `{key}` — name all three, or none (§11b)")
+                continue
+            if not isinstance(value, str) or not value:
+                fail(f"capabilities.{group}.{key} must be the name of one of your tools (§3b)")
+                continue
+            declared.append((f"{group}.{key}", value))
+
+    # `tool_name`, not `name`: `name` is the module's own name further up, and
+    # shadowing it renamed the module in this script's own report.
+    for where, tool_name in declared:
+        if tool_name not in tool_names:
+            fail(f"capabilities.{where} names `{tool_name}`, which is not in your tools — "
+                 "a declaration that does not resolve is worse than none (§3b)")
+
+    if (MODULE / "ui").is_dir():
+        if "panel" not in caps:
+            warn("this module has a UI but declares no panel channel (§11b): the model "
+                 "cannot see or steer what the user is looking at. Vendor template/_panel.py "
+                 "and declare capabilities.panel if you want it.")
+        if "ui" not in caps:
+            warn("this module has a UI but does not declare capabilities.ui.open (§3b): the "
+                 "host cannot offer a button for it and has to hope the model picks the right tool.")
+        # The one thing that is dangerous rather than merely undeclared.
+        leaked = sorted(n for n in tool_names if n.endswith(("panel_pull", "panel_dismiss")))
+        if leaked:
+            fail(f"panel plumbing must not be model-visible (§11b): {leaked}")
 
 # ── Secret scan (the Python `secrets` module is a known false positive) ────
 SECRET = re.compile(r'(api[_-]?key|password|client[_-]?secret)\s*[:=]\s*["\']([^"\']{8,})', re.I)

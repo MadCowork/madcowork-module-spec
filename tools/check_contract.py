@@ -360,12 +360,30 @@ else:
                 fail(f"Known Limitations entries are too short to say anything (<15 chars): {short[:2]}")
 
 # ── Secret scan (the Python `secrets` module is a known false positive) ────
-SECRET = re.compile(r'(api[_-]?key|password|client[_-]?secret)\s*[:=]\s*["\'][^"\']{8,}', re.I)
+SECRET = re.compile(r'(api[_-]?key|password|client[_-]?secret)\s*[:=]\s*["\']([^"\']{8,})', re.I)
+# A UI label is not a credential. `loginPassword: "Password"` and its nine
+# translations are prose: letters, spaces and punctuation, no digits or
+# symbols. Real secrets are keys, tokens and passwords — they carry digits or
+# symbols essentially always. Skipping prose loses the pathological
+# all-lowercase-words passphrase; that miss is the right trade, because a
+# checker that accuses correct code sends people to "fix" what is already
+# right, and every module with a login field would hit this.
+PROSE = re.compile(r"^[^\W\d_][\w \-\u2018\u2019'.,:;!?()\u3000-\u303f\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]*$", re.U)
+def is_prose(value: str) -> bool:
+    if re.search(r"\d", value) or not PROSE.match(value):
+        return False
+    # Labels are words; secrets are long unbroken tokens. Split on whitespace
+    # and hyphens (compound labels are everywhere: "Palavra-passe",
+    # "one-time code") and treat any chunk longer than a long word as a token.
+    return all(len(chunk) <= 12 for chunk in re.split(r"[\s\-\u2010-\u2015]+", value) if chunk)
 for f in MODULE.rglob("*"):
     if f.is_file() and f.suffix in {".py", ".json", ".js", ".html", ".md"}:
         for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            if SECRET.search(line):
+            for m in SECRET.finditer(line):
+                if is_prose(m.group(2)):
+                    continue
                 fail(f"possible hard-coded secret: {f.relative_to(MODULE)}:{i}")
+                break
 
 # ── Result ────────────────────────────────────────────────────────────────
 print(f"Module contract check: {name or MODULE.name}")

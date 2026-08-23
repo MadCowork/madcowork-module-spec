@@ -38,7 +38,18 @@ import time
 
 MAX_CARDS = 5
 MAX_CARD_LINES = 12
+MAX_LINE_CHARS = 500
+MAX_CARD_CHARS = 4000
+MAX_STATE_KEYS = 12
+MAX_STATE_VALUE_CHARS = 200
 LEVELS = ("info", "warn", "danger", "ok")
+
+# Keys the channel computes itself. A page's report and a focus `extra` are
+# both untrusted input from this class's point of view — the page is a web
+# page and the module process is what everyone else trusts. Letting either
+# write these would let it fake what the user is looking at.
+RESERVED_FOCUS_KEYS = frozenset({"tab"})
+RESERVED_STATE_KEYS = frozenset({"open", "cards", "at"})
 
 
 class PanelChannel:
@@ -51,6 +62,7 @@ class PanelChannel:
         self._focus: dict = {}
         self._cards: list[dict] = []
         self._state: dict = {}
+        self._state_at = 0.0
 
     # ── model-facing ──────────────────────────────────────────────────
     def focus(self, args: dict) -> dict:
@@ -61,7 +73,10 @@ class PanelChannel:
                 raise ValueError(f"tab must be one of {list(self.tabs)}")
             wanted["tab"] = tab
         for key, value in (args.get("extra") or {}).items():
-            wanted[str(key)[:32]] = str(value)[:120]
+            name = str(key)[:32]
+            if name in RESERVED_FOCUS_KEYS:
+                raise ValueError(f"extra may not set `{name}` — pass it as the argument instead")
+            wanted[name] = str(value)[:120]
         if not wanted:
             raise ValueError("nothing to focus: give a tab (or extra values)")
         with self._lock:
@@ -76,11 +91,21 @@ class PanelChannel:
         lines = args.get("lines")
         if isinstance(lines, str):
             lines = [lines]
-        lines = [str(line).strip() for line in (lines or []) if str(line or "").strip()]
+        lines = [str(line).strip()[:MAX_LINE_CHARS] for line in (lines or []) if str(line or "").strip()]
+        lines = lines[:MAX_CARD_LINES]
+        # Total cap as well as per-line: twelve lines of five hundred is still
+        # a wall, and the panel has to render it next to real data.
+        budget = MAX_CARD_CHARS
+        bounded = []
+        for line in lines:
+            if budget <= 0:
+                break
+            bounded.append(line[:budget])
+            budget -= len(bounded[-1])
         level = str(args.get("level") or "info").strip().lower()
         if level not in LEVELS:
             raise ValueError(f"level must be one of {list(LEVELS)}")
-        card = {"title": title[:120], "lines": lines[:MAX_CARD_LINES],
+        card = {"title": title[:120], "lines": bounded,
                 "level": level, "author": self.author, "at": int(time.time())}
         with self._lock:
             self._seq += 1
@@ -89,19 +114,29 @@ class PanelChannel:
 
     def state(self, _args: dict = None) -> dict:
         with self._lock:
-            state = dict(self._state)
+            reported = dict(self._state)
             cards = len(self._cards)
-        if not state:
+            seen_at = self._state_at
+        if not reported:
             return {"open": False, "note": "the panel has not reported in — it may not be open"}
-        return {"open": time.time() - float(state.get("at") or 0) < 20, "cards": cards, **state}
+        # Computed fields go LAST: spread first and they can be overwritten by
+        # whatever the page reported, which is how a page could claim to be
+        # open when it is not.
+        return {**reported, "open": time.time() - seen_at < 20, "cards": cards, "at": seen_at}
 
     # ── panel-facing (never expose these to the model) ────────────────
     def pull(self, args: dict) -> dict:
         report = (args or {}).get("state")
         with self._lock:
             if isinstance(report, dict):
-                self._state = {str(k)[:32]: str(v)[:200] for k, v in report.items()}
-                self._state["at"] = time.time()
+                cleaned = {}
+                for key, value in report.items():
+                    name = str(key)[:32]
+                    if name in RESERVED_STATE_KEYS or len(cleaned) >= MAX_STATE_KEYS:
+                        continue
+                    cleaned[name] = str(value)[:MAX_STATE_VALUE_CHARS]
+                self._state = cleaned
+                self._state_at = time.time()
             payload = {"seq": self._seq, "focus": dict(self._focus), "cards": list(self._cards)}
             self._focus = {}
         return payload

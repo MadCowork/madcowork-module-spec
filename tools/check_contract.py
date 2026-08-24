@@ -444,21 +444,116 @@ if server_py.exists():
                  "reads them. Declaring the channel does not open it.")
 
         if "panel_pull" in code:
-            # A card field is unsafe only when it reaches the markup RAW.
-            # `${esc(card.title)}` is fine; `${card.title}` is not. So look at
-            # what the interpolation *opens with*: an identifier followed by
-            # `(` is a call — an escape, a formatter, something. A bare
-            # `card.` / `c.` is the field itself, verbatim.
-            #
-            # Blunter versions of this rule fire on all three shipped modules,
-            # which escape correctly. A checker that cries wolf on correct code
-            # is worse than no checker: people learn to scroll past it.
-            raw = [
-                m.group(0)
-                for m in re.finditer(r"\$\{\s*[^{}]*?\}", code)
-                if re.match(r"\$\{\s*(?:card|c)\s*[.\[]\s*[\"\']?(?:title|lines|level)", m.group(0))
-            ]
-            if raw and "innerHTML" in code:
+            # A card field is unsafe only when it reaches markup raw.
+            # `${esc(card.title)}` is accepted, but `${String(card.title)}` is
+            # not: String is a formatter, not an HTML escape. Track common
+            # callback aliases (`cards.map(item => ...)`) and local aliases so
+            # renaming `card` cannot turn the rule off. This remains a bounded
+            # static check rather than a JavaScript parser, so the safe side is
+            # deliberately an allowlist of known escaping functions.
+            card_vars = {"card", "c"}
+            for pattern in (
+                r"\bcards\s*\.\s*(?:map|forEach)\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)",
+                r"\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+of\s+cards\b",
+            ):
+                card_vars.update(re.findall(pattern, code))
+
+            fields = r"(?:title|lines|level)"
+            var_group = "|".join(re.escape(name) for name in sorted(card_vars))
+            direct = rf"(?:{var_group})\s*(?:\?\.|\.|\[\s*['\"])\s*{fields}"
+            aliases = set()
+            for match in re.finditer(
+                rf"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*({direct})",
+                code,
+            ):
+                aliases.add(match.group(1))
+            for match in re.finditer(
+                rf"(?:{var_group})\s*(?:\?\.|\.)\s*lines\b[^;\n]*?\.\s*map\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)",
+                code,
+            ):
+                aliases.add(match.group(1))
+
+            alias_group = "|".join(re.escape(name) for name in sorted(aliases))
+            tainted = rf"(?:{direct}{'|\\b(?:' + alias_group + r')\b' if alias_group else ''})"
+            safe_escape = r"(?:esc|escapeText|escapeHtml|escapeHTML)"
+            safe_expr = re.compile(rf"^\s*{safe_escape}\s*\(\s*{tainted}\s*\)\s*$", re.S)
+
+            # Only inspect template literals that can feed an innerHTML write.
+            # Looking at every interpolation in the file falsely condemns safe
+            # DOM-only code merely because some unrelated component uses
+            # innerHTML elsewhere. Include a small window before the write so
+            # `const markup = ...; node.innerHTML = markup` is still covered.
+            lines = code.splitlines()
+            markup_code = "\n".join(
+                "\n".join(lines[max(0, index - 8):index + 12])
+                for index, line in enumerate(lines)
+                if "innerHTML" in line
+            )
+            def template_interpolations(source):
+                """Yield complete ${...} spans, including nested template literals."""
+                cursor = 0
+                while True:
+                    start = source.find("${", cursor)
+                    if start < 0:
+                        return
+                    depth = 1
+                    index = start + 2
+                    while index < len(source) and depth:
+                        if source.startswith("${", index):
+                            depth += 1
+                            index += 2
+                            continue
+                        if source[index] == "{":
+                            depth += 1
+                        elif source[index] == "}":
+                            depth -= 1
+                        index += 1
+                    if depth:
+                        return
+                    yield source[start:index], source[start + 2:index - 1]
+                    cursor = index
+
+            line_collection = (
+                rf"(?:{var_group})\s*(?:\?\.|\.|\[\s*['\"])\s*lines"
+                r"(?:\s*['\"]\s*\])?"
+            )
+            safe_lines_map = re.compile(
+                rf"^\s*\(?\s*{line_collection}\s*(?:\|\|\s*\[\s*\])?\s*\)?"
+                r"\s*\.\s*map\s*\(.*\)\s*\.\s*join\s*\(\s*['\"]\s*['\"]\s*\)\s*$",
+                re.S,
+            )
+
+            def interpolation_is_safe(expression):
+                if safe_expr.fullmatch(expression):
+                    return True
+
+                scrubbed = expression
+                for span, nested_expression in template_interpolations(expression):
+                    if (re.search(tainted, nested_expression, flags=re.S)
+                            and not interpolation_is_safe(nested_expression)):
+                        return False
+                    scrubbed = scrubbed.replace(span, "__SAFE_INTERPOLATION__", 1)
+
+                if safe_lines_map.fullmatch(scrubbed):
+                    # `card.lines` controls iteration, but only callback output
+                    # reaches markup. Remove the collection and callback
+                    # declaration, then reject any remaining raw line alias.
+                    residual = re.sub(line_collection, "", scrubbed, count=1)
+                    if alias_group:
+                        residual = re.sub(
+                            rf"\(?\s*\b(?:{alias_group})\b\s*\)?\s*=>",
+                            "=>",
+                            residual,
+                        )
+                    return not re.search(tainted, residual, flags=re.S)
+
+                return not re.search(tainted, scrubbed, flags=re.S)
+
+            raw = []
+            for span, expression in template_interpolations(markup_code):
+                if re.search(tainted, expression, flags=re.S) and not interpolation_is_safe(expression):
+                    raw.append(span)
+            if raw:
                 fail("card fields reach the markup unescaped (§11b): "
                      f"{raw[:2]} — a card's title and lines are model output, so this is the "
                      "page rendering whatever the model emitted. Build the nodes "

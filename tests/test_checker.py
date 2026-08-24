@@ -36,6 +36,10 @@ class PanelConsumerContractTests(unittest.TestCase):
         self.assertIn(old, source, f"mutation precondition missing: {old}")
         path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
+    def append_app(self, source: str) -> None:
+        path = self.module / "ui" / "app.js"
+        path.write_text(path.read_text(encoding="utf-8") + source, encoding="utf-8")
+
     def test_reference_template_has_no_contract_findings(self) -> None:
         result = self.run_checker()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -48,12 +52,54 @@ class PanelConsumerContractTests(unittest.TestCase):
         self.assertIn("no UI file calls `panel_pull`", result.stdout)
 
     def test_raw_model_card_interpolation_fails(self) -> None:
-        path = self.module / "ui" / "app.js"
-        path.write_text(
-            path.read_text(encoding="utf-8")
-            + "\nconst unsafeCard = `${card.title}`\n"
-            + "document.getElementById('agentCards').innerHTML = unsafeCard\n",
-            encoding="utf-8",
+        self.append_app(
+            "\nconst unsafeCard = `${card.title}`\n"
+            "document.getElementById('agentCards').innerHTML = unsafeCard\n"
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("card fields reach the markup unescaped", result.stdout)
+
+    def test_string_wrapper_does_not_count_as_html_escaping(self) -> None:
+        self.append_app(
+            "\nconst unsafeCard = `${String(card.title)}`\n"
+            "document.getElementById('agentCards').innerHTML = unsafeCard\n"
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("card fields reach the markup unescaped", result.stdout)
+
+    def test_renamed_card_and_multiline_interpolation_fail(self) -> None:
+        self.append_app(
+            "\nconst unsafeCards = cards.map(item => `<p>${\n  item.title\n}</p>`).join('')\n"
+            "document.getElementById('agentCards').innerHTML = unsafeCards\n"
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("card fields reach the markup unescaped", result.stdout)
+
+    def test_known_escape_wrapper_remains_accepted(self) -> None:
+        self.append_app(
+            "\nconst safeCards = cards.map(item => `<p>${esc(item.title)}</p>`).join('')\n"
+            "document.getElementById('agentCards').innerHTML = safeCards\n"
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("card fields reach the markup unescaped", result.stdout)
+
+    def test_escaped_line_map_remains_accepted(self) -> None:
+        self.append_app(
+            "\nconst safeCards = cards.map(item => `<div>${(item.lines || []).map(line => `<p>${esc(line)}</p>`).join('')}</div>`).join('')\n"
+            "document.getElementById('agentCards').innerHTML = safeCards\n"
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("card fields reach the markup unescaped", result.stdout)
+
+    def test_string_wrapped_line_map_fails(self) -> None:
+        self.append_app(
+            "\nconst unsafeCards = cards.map(item => `<div>${(item.lines || []).map(line => `<p>${String(line)}</p>`).join('')}</div>`).join('')\n"
+            "document.getElementById('agentCards').innerHTML = unsafeCards\n"
         )
         result = self.run_checker()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)

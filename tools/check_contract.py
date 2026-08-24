@@ -416,6 +416,82 @@ if server_py.exists():
         if leaked:
             fail(f"panel plumbing must not be model-visible (§11b): {leaked}")
 
+        # ── The consuming half (§11b) ────────────────────────────────────
+        # `_panel.py` bounds what the model may write; it does NOT escape it,
+        # and it cannot — escaping belongs to whoever renders. So the checks
+        # below are about the page, not the server:
+        #
+        #   1. a declared channel the UI never reads is decorative
+        #   2. card fields are model output; interpolating them into innerHTML
+        #      without an escape hands the page to whatever the model emits
+        #   3. an unlabelled model judgement sitting next to real numbers is
+        #      the worst outcome this feature can produce
+        ui_files = {
+            path: path.read_text(encoding="utf-8", errors="ignore")
+            for path in sorted((MODULE / "ui").rglob("*"))
+            if path.suffix in (".js", ".html", ".mjs") and path.is_file()
+        }
+        ui_src = "\n".join(ui_files.values())
+        # Comments are for maintainers. A file that only *mentions* innerHTML
+        # in a warning about innerHTML must not trip the innerHTML rule —
+        # the template's own reference implementation does exactly that.
+        code = re.sub(r"/\*.*?\*/", "", ui_src, flags=re.S)
+        code = re.sub(r"//[^\n]*", "", code)
+
+        if "panel" in caps and "panel_pull" not in code:
+            warn("entryPoints.panel is declared but no UI file calls `panel_pull` (§11b): "
+                 "the model can write cards and set focus, and nothing on the page ever "
+                 "reads them. Declaring the channel does not open it.")
+
+        if "panel_pull" in code:
+            # A card field is unsafe only when it reaches the markup RAW.
+            # `${esc(card.title)}` is fine; `${card.title}` is not. So look at
+            # what the interpolation *opens with*: an identifier followed by
+            # `(` is a call — an escape, a formatter, something. A bare
+            # `card.` / `c.` is the field itself, verbatim.
+            #
+            # Blunter versions of this rule fire on all three shipped modules,
+            # which escape correctly. A checker that cries wolf on correct code
+            # is worse than no checker: people learn to scroll past it.
+            raw = [
+                m.group(0)
+                for m in re.finditer(r"\$\{\s*[^{}]*?\}", code)
+                if re.match(r"\$\{\s*(?:card|c)\s*[.\[]\s*[\"\']?(?:title|lines|level)", m.group(0))
+            ]
+            if raw and "innerHTML" in code:
+                fail("card fields reach the markup unescaped (§11b): "
+                     f"{raw[:2]} — a card's title and lines are model output, so this is the "
+                     "page rendering whatever the model emitted. Build the nodes "
+                     "(createElement + textContent) or escape every interpolation — see "
+                     "template/ui/app.js for the reference implementation.")
+            # Scoped to the file that actually renders the cards, and stripped
+            # of comments, for two reasons this rule failed to fire before:
+            #
+            #   - plain "MadCowork" matched X-MadCowork-Module-Token, which every
+            #     module sends, so the check could never fail
+            #   - searching every UI file matched the marker where it is *defined*
+            #     (i18n.js), not where it is *used*, so deleting the render still
+            #     passed
+            #
+            # Both were caught by mutating the template and getting silence. This
+            # stays a WARN: "the string is referenced near the renderer" is a
+            # heuristic for "the user sees where this came from", not a proof.
+            renderer = "\n".join(
+                re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", body, flags=re.S))
+                for path, body in ui_files.items()
+                if "panel_pull" in body
+            )
+            # `agentCard(?![s\w])` so the container id `agentCards` does not
+            # satisfy it: that id is present whether or not anything labels the
+            # source, which made this check pass on a renderer with both markers
+            # deleted. Third variant of the same mistake in this one rule — a
+            # pattern matching something that is there for an unrelated reason.
+            if not re.search(r"agentCard(?![s\w])|ac-src|ac-source", renderer):
+                warn("the UI renders panel cards but nothing marks where they came from (§11b): "
+                     "a model's reading of the data, unlabelled beside the data itself, is the "
+                     "worst outcome this channel can produce. The template uses an `agentCard` "
+                     "string in all nine languages.")
+
 # ── Secret scan (the Python `secrets` module is a known false positive) ────
 SECRET = re.compile(r'(api[_-]?key|password|client[_-]?secret)\s*[:=]\s*["\']([^"\']{8,})', re.I)
 # A UI label is not a credential. `loginPassword: "Password"` and its nine

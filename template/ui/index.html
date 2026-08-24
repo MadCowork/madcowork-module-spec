@@ -12,6 +12,10 @@
   <span class="sub" id="status" data-i18n="loading">Loading…</span>
 </header>
 <main>
+  <!-- 面板通道(§11b)寫進來的卡片落在這裡。內容出自模型,不是本模組的資料 ——
+       所以它有自己的容器、自己的樣式,而且每張卡都標明來源。混在真實資料
+       中間而沒有標記,是這個功能最壞的結果。 -->
+  <div id="agentCards" class="agent-cards" hidden></div>
   <section>
     <label for="body" data-i18n="newNote">New note</label>
     <textarea id="body"></textarea>

@@ -53,6 +53,13 @@ The checker enforces what this contract requires, and it is the same one the
 reference module runs in its own CI. **Run it yourself — do not wait for a user
 to install the package and discover the problem.**
 
+The checker regression suite includes mutated panel consumers that must warn or
+fail for the intended reason:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
 It catches, among others:
 
 | Rule | Why it exists |

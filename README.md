@@ -1,19 +1,37 @@
 # MadCowork Module Contract
 
-Build a module for [MadCowork](https://github.com/MadCowork). Ship it as one file.
-Users install it without a terminal, a Python install, or your help.
+Build a module for the [MadCowork flagship app](https://github.com/MadCowork/MadCowork).
+Ship it as one file so users can install it without a terminal, a Python install,
+or your help.
 
-A module gives MadCowork new abilities — tools the model can call, a screen the
-person can operate, and instructions that teach the model when to use them. It
-runs as a separate process, holds no credentials, and cannot break the host: if
-your module fails to load, MadCowork still starts.
+This repository is the **module-authoring contract and reference profile**. It
+does not define MadCowork's product architecture, agent loop, workspace model,
+or remote-compute control plane. MadCowork owns those systems; a module adds a
+bounded capability to them through MCP, an optional skill, and a local screen.
+Do not build a second agent platform merely because the extension transport is
+MCP.
+
+Use these product documents with this contract:
+
+| Document | Authority |
+|---|---|
+| [Architecture](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/madcowork-architecture-zh.md) | How MadCowork sessions, tools, workspaces, permissions, and runtimes fit together |
+| [Plugin development](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/plugin-development.md) | What the current host actually installs and consumes |
+| [Sandbox and confinement](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/sandbox-and-confinement.md) | Product command/hook confinement design; this contract records the current plugin-runtime boundary separately |
+| [Audited 0.61.0 host baseline](https://github.com/MadCowork/MadCowork/tree/204a64a83f2600711b37b412f626c8474c63fa5b/MadCowork-api) | Immutable compatibility reference used for the truth table below |
+
+A module can provide tools the model calls, a screen the person operates, and
+instructions that teach the model when to use those tools. A trusted local
+stdio module runs as a separate process **with the permissions of the signed-in
+OS user**. Process separation is a failure boundary; it is not a security
+sandbox.
 
 ```
 your-module/
   plugin.json      identity and compatibility
   mcp.json         how your server starts
   server.py        your tools
-  ui/index.html    your screen              (required, not optional)
+  ui/index.html    your screen              (required by this reference profile)
   skills/          teach the model when to use you
   invariant.py     how your module knows its own data is broken
   README.md        including "Known Limitations"
@@ -93,22 +111,33 @@ tools at all.
 data under `~/.madcowork/module-data/<your-name>/`, never inside your module
 directory — that directory disappears when the module is removed.
 
-## What a module cannot do
+## Trust is consent, not a sandbox
 
-| | |
+| State or boundary | What is true today |
 |---|---|
-| ❌ Touch MadCowork itself or its signature | Your module lives outside the app |
-| ❌ Read the user's credentials | The stdio environment is an allowlist; the vault key is not in it |
-| ❌ Run on install | Installed means `enabled + untrusted`. Nothing of yours executes until a person presses Trust |
+| Installed but untrusted | Plugin MCP servers, hooks, and skills are withheld; local plugin code does not start |
+| Trusted local stdio module | Its process runs as the signed-in OS user and can access user-readable files and the network |
+| Environment filtering | Provider key values and the host vault key are not copied into the child environment, but `HOME`, workspace/data paths, and `MADCOWORK_ENV_PATH` may be present; filtering is **not** filesystem confinement |
+| Tool approval | Plugin MCP tools are marked unsafe and go through MadCowork's action policy; an allow-all or always-allow choice may skip repeated prompts |
+| Remote MCP server | It runs in its own remote security boundary; this package contract does not define that infrastructure |
 
-These are not restrictions we expect you to respect voluntarily. The host
-enforces the runtime gates itself: trust, capabilities, manifest shape and
-`minimumHostVersion` are checked at install and on every launch, and an
-untrusted module never runs. The remaining "must" rules of this contract are
-enforced by the checker — run it in CI. Shipping that same checker inside the
-host (`madcowork plugin check`) is planned, not yet released; until then the
-host does not re-validate every contract rule at install time, so the checker
-is the gate.
+Only install and Trust code you would be willing to run under your own account.
+A trusted local module may read or modify anything that account can reach,
+including MadCowork configuration files. It must never modify MadCowork's app,
+signature, registry, or credentials, but that is an author obligation—not an OS
+sandbox guarantee.
+
+### What enforces each rule
+
+| Enforcement layer | Enforced now |
+|---|---|
+| MadCowork host | Install starts untrusted; trust gates MCP/hooks/skills; `minimumHostVersion` is checked when present; wrapped tool collisions are blocked; tool calls enter the host action policy |
+| This repository's checker | Full reference-profile manifest, UI/CSP, sentinel, entry-point, invariant, panel, i18n, and Known Limitations rules |
+| Convention / future host | Native use of `moduleApiVersion` and `entryPoints`, `ui://`, and a bundled `madcowork plugin check` command |
+
+The host currently accepts a smaller manifest than this reference profile. Run
+the checker in CI: fields required here are not automatically revalidated by
+the installed app unless the table explicitly says the host enforces them.
 
 ## Documents
 

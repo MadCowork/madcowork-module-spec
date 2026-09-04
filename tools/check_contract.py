@@ -10,6 +10,7 @@ Checks map to the MadCowork Module Contract v1:
   §2   skills/ are allowed, but tool names must be written the way the model
        sees them (the MCP-wrapped form)
   §3   plugin.json required fields and SemVer format
+  §3b  declared entry points resolve; ui.open matches current host discovery
   §4   a UI must exist, and must survive the CSP it is served under
   §5   mcp.json uses the sentinel, never an absolute path
   §6   tool names fit the truncation budget
@@ -370,7 +371,17 @@ if server_py.exists():
     src_text = server_py.read_text(encoding="utf-8")
     spec_style = re.findall(r'"name":\s*"([a-z0-9_]+)"', src_text)
     builder_style = re.findall(r'\btool\(\s*"([a-z0-9_]+)"', src_text)
+    dispatch_style = re.findall(
+        r'^\s*"([a-z][a-z0-9_]*)"\s*:\s*[A-Za-z_]', src_text, re.M
+    )
     tool_names = set(spec_style) | set(builder_style)
+    used_dispatch_fallback = not tool_names
+    # Some small servers declare only a dispatch dictionary. Fall back to that
+    # style only when no explicit tool specs/builders are visible: combining
+    # both would misclassify private page handlers in a broader HANDLERS map as
+    # model-visible tools.
+    if not tool_names:
+        tool_names = set(dispatch_style)
     caps = pj.get("entryPoints")
     if caps is not None and not isinstance(caps, dict):
         fail("entryPoints must be an object (§3b)")
@@ -403,17 +414,34 @@ if server_py.exists():
             fail(f"entryPoints.{where} names `{tool_name}`, which is not in your tools — "
                  "a declaration that does not resolve is worse than none (§3b)")
 
+    ui_block = caps.get("ui") if isinstance(caps.get("ui"), dict) else {}
+    ui_open = ui_block.get("open") if ui_block else None
+    if isinstance(ui_open, str) and ui_open and not ui_open.endswith("_open_ui"):
+        fail(f"entryPoints.ui.open names `{ui_open}`, but the current MadCowork host "
+             "discovers module screens only from a tool ending in `_open_ui`; "
+             "entryPoints is checker metadata and is not yet consumed by the host (§3b, §4)")
+
     if (MODULE / "ui").is_dir():
+        open_ui_tools = sorted(n for n in tool_names if n.endswith("_open_ui"))
+        if not open_ui_tools:
+            fail("this module has a UI but no model-visible tool ends in `_open_ui`; "
+                 "the current MadCowork host will not discover the screen (§4)")
         if "panel" not in caps:
             warn("this module has a UI but declares no panel channel (§11b): the model "
                  "cannot see or steer what the user is looking at. Vendor template/_panel.py "
                  "and declare entryPoints.panel if you want it.")
         if "ui" not in caps:
             warn("this module has a UI but does not declare entryPoints.ui.open (§3b): the "
-                 "host cannot offer a button for it and has to hope the model picks the right tool.")
+                 "current host can still discover an `_open_ui` tool, but the explicit "
+                 "forward-compatible entry-point metadata is missing.")
         # The one thing that is dangerous rather than merely undeclared.
         leaked = sorted(n for n in tool_names if n.endswith(("panel_pull", "panel_dismiss")))
-        if leaked:
+        if leaked and used_dispatch_fallback:
+            warn("dispatch-dictionary fallback also found panel plumbing, but cannot "
+                 "prove that those handlers are model-visible; the leak judgement was "
+                 "skipped. Add explicit tool specs/builders so the checker can distinguish "
+                 "the MCP surface from private page handlers (§11b).")
+        elif leaked:
             fail(f"panel plumbing must not be model-visible (§11b): {leaked}")
 
         # ── The consuming half (§11b) ────────────────────────────────────

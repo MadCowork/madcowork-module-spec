@@ -3,6 +3,12 @@
 A minimal MadCowork module: one screen, four tools, one skill. It stores short
 notes locally and sends nothing anywhere.
 
+> **Trust is consent to run code, not a sandbox.** After Trust, a local stdio
+> module runs with the signed-in OS user's filesystem and network permissions.
+> The host filters its child environment, but that does not confine file access.
+> Read the contract's [scope and authority](../spec/contract-v1.md#01-scope-and-authority)
+> before adapting this template for secrets or remote infrastructure.
+
 Copy this directory, rename it, and start replacing. **It already passes
 `check_contract.py`**, so the first failure you see will be about your change —
 not about the skeleton.

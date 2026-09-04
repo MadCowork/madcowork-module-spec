@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -40,10 +41,62 @@ class PanelConsumerContractTests(unittest.TestCase):
         path = self.module / "ui" / "app.js"
         path.write_text(path.read_text(encoding="utf-8") + source, encoding="utf-8")
 
+    def mutate_manifest(self, mutate) -> None:
+        path = self.module / "plugin.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        mutate(manifest)
+        path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
     def test_reference_template_has_no_contract_findings(self) -> None:
         result = self.run_checker()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("0 FAIL / 0 WARN", result.stdout)
+
+    def test_ui_entry_point_must_match_current_host_discovery_suffix(self) -> None:
+        self.mutate_manifest(
+            lambda manifest: manifest["entryPoints"]["ui"].update(
+                {"open": "example_panel_state"}
+            )
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("discovers module screens only from a tool ending in `_open_ui`", result.stdout)
+
+    def test_ui_requires_a_current_host_discovery_tool(self) -> None:
+        self.mutate_manifest(lambda manifest: manifest.pop("entryPoints"))
+        server = self.module / "server.py"
+        source = server.read_text(encoding="utf-8")
+        self.assertIn("example_open_ui", source)
+        server.write_text(source.replace("example_open_ui", "example_show_screen"), encoding="utf-8")
+        skill = self.module / "skills" / "example-notes.md"
+        skill_source = skill.read_text(encoding="utf-8")
+        self.assertIn("example_open_ui", skill_source)
+        skill.write_text(
+            skill_source.replace("example_open_ui", "example_show_screen"),
+            encoding="utf-8",
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no model-visible tool ends in `_open_ui`", result.stdout)
+
+    def test_missing_ui_entry_point_metadata_warns_without_false_host_claim(self) -> None:
+        self.mutate_manifest(lambda manifest: manifest["entryPoints"].pop("ui"))
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("current host can still discover an `_open_ui` tool", result.stdout)
+        self.assertNotIn("host cannot offer a button", result.stdout)
+
+    def test_dispatch_dict_tool_style_is_used_for_entry_point_checks(self) -> None:
+        server = self.module / "server.py"
+        source = server.read_text(encoding="utf-8")
+        self.assertIn('"name":', source)
+        source = source.replace('"name":', "'name':")
+        server.write_text(source, encoding="utf-8")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("which is not in your tools", result.stdout)
+        self.assertNotIn("no model-visible tool ends in `_open_ui`", result.stdout)
+        self.assertIn("cannot prove that those handlers are model-visible", result.stdout)
 
     def test_declared_panel_without_a_consumer_warns(self) -> None:
         self.mutate_app("call('panel_pull'", "call('panel_missing'")

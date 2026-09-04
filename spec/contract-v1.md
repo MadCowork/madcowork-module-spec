@@ -3,22 +3,53 @@
 ## 0. In one sentence
 
 **A module is a single `.mcpkg` file. Installed into MadCowork it provides MCP
-tools and its own HTML screen. It never touches the host application or the
-user's credentials, and updating it means replacing that one file.**
+tools and its own HTML screen; after the user Trusts a local stdio module, its
+server runs as that OS user, so Trust is consent to execute code—not a
+sandbox.**
+
+### 0.1 Scope and authority
+
+This document is a **module-authoring contract and reference profile**. It does
+not define MadCowork's product architecture, agent loop, workspace lifecycle,
+or remote-compute control plane. Those belong to the
+[flagship architecture](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/madcowork-architecture-zh.md)
+and [plugin development](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/plugin-development.md)
+documents. Security boundaries are defined in
+[sandbox and confinement](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/sandbox-and-confinement.md).
+The immutable host baseline used to audit this v1 text is
+[MadCowork 0.61.0 at `204a64a`](https://github.com/MadCowork/MadCowork/tree/204a64a83f2600711b37b412f626c8474c63fa5b/MadCowork-api).
+
+MadCowork owns sessions, workspaces, permissions, the model/tool loop, tasks,
+and artifacts. A module supplies a capability inside that host. MCP is the
+extension transport; its presence is not a reason to build a second agent
+platform or duplicate the host control plane.
 
 ## 1. What you can and cannot do
 
 | | |
 |---|---|
 | ✅ Provide MCP tools the model can call | |
-| ✅ Provide an HTML screen the person operates | **Required, not optional** — see §4 |
+| ✅ Provide an HTML screen the person operates | **Required by this reference profile** — see §4 |
 | ✅ Store data in `~/.madcowork/module-data/<your-name>/` | Removing the module does not delete it |
-| ❌ Touch MadCowork itself or its signature | Your module lives outside the app |
-| ❌ Read the user's credentials | The stdio environment is an allowlist; the vault key is not in it |
+| ⚠️ Run with the user's filesystem and network access after Trust | A separate process is a crash boundary, not a security sandbox |
+| ❌ Modify MadCowork itself, its signature, registry, or credentials | This is an author obligation; the current local runtime does not OS-sandbox the process |
 | ❌ Run anything on install | Installed means `enabled + untrusted`; a person must press Trust |
 
-**If your module is broken, the worst outcome is that your module does not
-load and the app starts normally.** That is deliberate.
+The child environment is filtered: provider key values and the host vault key
+are not copied into it. However, variables such as `HOME`, workspace/data paths,
+and `MADCOWORK_ENV_PATH` may be present. A trusted process can also open files
+that its OS account can read. **Environment filtering is not filesystem
+confinement and is not a credential-access guarantee.**
+
+Plugin MCP tools are marked unsafe and enter MadCowork's action policy. A user
+can choose allow-all or always-allow, so this approval layer is not a sandbox
+either. Only install and Trust code you would willingly run under your own
+account.
+
+A malformed or crashed module should not prevent the host from starting, but
+code that has already been Trusted can still damage user-accessible data or
+make network requests. Do not describe process isolation as "cannot break the
+host."
 
 ## 2. What goes in the package
 
@@ -29,7 +60,7 @@ your-module/
   server.py        your tools
   ui/index.html    your screen (§4)
   skills/          when the model should use you (§2.1)
-  invariant.py     how the module detects its own broken data (§11)
+  invariant.py     how the module detects its own broken data (§10)
   README.md  CHANGELOG.md  LICENSE
 ```
 
@@ -91,47 +122,52 @@ tool makes the skill fail silently — and silent failure here looks exactly lik
 }
 ```
 
-| Field | Rule |
-|---|---|
-| `name` | Globally unique; **also part of your tool-name prefix** — see §6 |
-| `version` | SemVer. PATCH = bug fix; MINOR = new backward-compatible tools or fields; MAJOR = removing a tool, changing a required parameter, or breaking a data format |
-| `moduleApiVersion` | Currently `1` |
-| `minimumHostVersion` | **The oldest MadCowork you work on.** The host refuses installs below it |
-| `repository` | Where your source lives, so a user can get it |
-| `runtimeInvariant` | See §11 |
-| `entryPoints` | **Name your entry points; do not make anyone guess them.** See §3b |
+| Field | Rule | Enforced today by |
+|---|---|---|
+| `name` | Globally unique; **also part of your tool-name prefix** — see §6 | Host requires it; checker applies the full profile |
+| `version` | SemVer. PATCH = bug fix; MINOR = new backward-compatible tools or fields; MAJOR = removing a tool, changing a required parameter, or breaking a data format | Checker; the 0.61.0 installer does not require it |
+| `moduleApiVersion` | Currently `1` | Checker; reserved for a future host contract gate |
+| `minimumHostVersion` | **The oldest MadCowork you work on.** When present, the host refuses installs below it | Host and checker |
+| `repository` | Where your source lives, so a user can get it | Checker |
+| `runtimeInvariant` | See §10 | Checker imports and executes it; the host does not |
+| `entryPoints` | Declare entry points explicitly; see the current-host compatibility rule in §3b | Checker; reserved for future native host consumption |
 
 ### 3b. `entryPoints` — say what you offer, by name
 
-Optional, and worth writing. Each entry names a tool of yours, so the host and
-the checker read a fact instead of inferring one. It is called `entryPoints`
-and not `capabilities` because the host already reports a `capabilities`
-object of its own for every plugin — skills, hooks, mcp — computed from what
-it finds in the package. Two different things must not share one word.
+Optional to the current host, and worth writing. Each entry names a tool of
+yours so the checker—and a future host—can read a fact instead of inferring
+one. MadCowork 0.61.0 does **not** consume `entryPoints`; its plugin capability
+report only describes the package components it found: skills, hooks, and MCP.
+It is called `entryPoints` precisely so those two concepts do not share a name.
 
 | Key | Meaning |
 |---|---|
-| `ui.open` | The tool that opens your screen. The host can put a button on it — no model, no routing, no guessing which of your tools is the panel one |
+| `ui.open` | The tool that opens your screen. **For the current host its name must end in `_open_ui`**, because 0.61.0 discovers loopback screens by that suffix, not by reading this field |
 | `panel.focus` / `panel.note` / `panel.state` | Your panel channel (§11b) |
 
 Every name here must appear in `tools/list`; the checker fails you if it does
 not, because a declaration that does not resolve is worse than no declaration.
 
-Why this exists: the checker used to infer the panel channel from tool-name
-suffixes, and it was wrong twice in a day — telling a builder-style module it
-had no channel, and reporting correctly hidden plumbing as leaked. A heuristic
-that misjudges sends authors to "fix" code that is already right. So the
-module states it and the checker verifies the statement.
+Why this exists: explicit metadata is the intended durable interface. Until the
+host consumes it, the checker verifies both the explicit declaration and the
+legacy `_open_ui` discovery convention. Panel entries are checker metadata
+today; they prevent the checker from guessing channel names.
 
-## 4. The screen is required, not optional
+## 4. The reference profile requires a screen
 
-**A module that only offers MCP tools is not finished** — that locks the
-capability inside the conversation, where nobody but the model can reach it.
+The 0.61.0 host accepts headless MCP plugins. This reference profile is stricter:
+**a module that only offers MCP tools is not complete for this contract**,
+because the capability is locked inside the conversation, where nobody but the
+model can reach it. The checker—not the current installer—enforces this rule.
 
 **How it is delivered today (v1, transitional):** your module runs a minimal
-HTTP server bound to `127.0.0.1` only, and exposes a tool (for example
-`<name>_open_ui`) that returns a loopback URL. MadCowork opens it in its
-browser panel.
+HTTP server bound to `127.0.0.1` only, and exposes a tool whose name ends in
+`_open_ui`. Its successful tool result must be a JSON object with a string
+`url`, for example `{"ok": true, "url": "http://127.0.0.1:1234/?token=…"}`.
+MadCowork 0.61.0 requires an `http` or `https` URL whose host is `127.0.0.1`,
+`localhost`, or `[::1]`; a bare URL string is ignored. It discovers the tool by
+the suffix and opens the URL in its browser panel; it does not yet read
+`entryPoints.ui.open`.
 
 - **Write endpoints must require a token.** Generate it at start-up with
   `secrets.token_urlsafe()` and verify it from a header (the reference
@@ -264,22 +300,32 @@ worth it, so you find out in your CI rather than on a user's machine.
 
 ## 8. What the host guarantees
 
-Everything this contract marks "must" is **enforced by the host, not left to
-authors' good behaviour**:
+The host and this repository's checker enforce different layers. Treating them
+as interchangeable creates both compatibility bugs and false security claims.
 
-- `plugin.json` fields and SemVer format are validated at install; malformed
-  packages are refused
-- `minimumHostVersion` is compared against the running version; a mismatch is
-  refused with both versions named
-- Tool names are checked for collision after truncation; **on collision neither
-  side is published**, rather than letting install order decide a silent winner
-- For an untrusted module, hooks, MCP servers and skills are all withheld;
-  revoking trust takes effect immediately, with no restart
-- Child-process environments go through an allowlist, so your module cannot
-  read the user's credentials
+| Rule | MadCowork 0.61.0 host | `check_contract.py` |
+|---|---|---|
+| Install state | Installs enabled but untrusted; withholds plugin MCP, hooks, and skills until Trust | Not applicable |
+| Manifest shape | Requires `plugin.json.name`; validates optional `minimumHostVersion` | Requires and validates the full reference-profile manifest, including SemVer, `moduleApiVersion`, repository, invariant, limitations, and entry points |
+| Host compatibility | Refuses a package whose present `minimumHostVersion` exceeds the running host | Validates field syntax only |
+| Tool-name collision | Blocks wrapped-name collisions after prefixing/truncation | Checks what can be proven from one package |
+| Screen discovery | Looks for a model-visible tool ending in `_open_ui` whose non-error result is a JSON object containing an allowed loopback `url`; does not read `entryPoints` | Requires the reference UI and validates `entryPoints.ui.open` against the `_open_ui` convention |
+| Tool approval | Marks plugin MCP tools unsafe and applies the user's action policy | Not applicable |
+| Runtime isolation | Filters the child environment but launches local stdio code as the OS user; no filesystem or network sandbox | Warns through this contract; cannot sandbox code |
+| Invariant, panel, CSP, i18n, limitations | Not comprehensively revalidated at install | Enforced by the checker |
 
-> The point of this list is that **you do not have to be careful to be safe.**
-> If you get it wrong, the worst case is that your module does not load.
+Revoking Trust through the running app's settings reconciles plugin servers.
+The CLI writes the registry but tells users that a running app may need a
+restart or a settings toggle before the new state is applied. Do not promise
+that every untrust path stops an already running process immediately.
+
+`moduleApiVersion`, native `entryPoints` consumption, `ui://`, and a bundled
+`madcowork plugin check` are forward-looking interfaces. This repository may
+define and test them, but must label them as checker rules or planned host work
+until the flagship consumes them.
+
+The author remains responsible for what Trusted code does. No checker or action
+prompt converts same-user execution into confinement.
 
 ## 9. How you know you got it right
 

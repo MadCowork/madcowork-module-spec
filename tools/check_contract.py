@@ -10,6 +10,7 @@ Checks map to the MadCowork Module Contract v1:
   §2   skills/ are allowed, but tool names must be written the way the model
        sees them (the MCP-wrapped form)
   §3   plugin.json required fields and SemVer format
+  §3b  declared entry points resolve; ui.open matches current host discovery
   §4   a UI must exist, and must survive the CSP it is served under
   §5   mcp.json uses the sentinel, never an absolute path
   §6   tool names fit the truncation budget
@@ -370,7 +371,17 @@ if server_py.exists():
     src_text = server_py.read_text(encoding="utf-8")
     spec_style = re.findall(r'"name":\s*"([a-z0-9_]+)"', src_text)
     builder_style = re.findall(r'\btool\(\s*"([a-z0-9_]+)"', src_text)
+    dispatch_style = re.findall(
+        r'^\s*"([a-z][a-z0-9_]*)"\s*:\s*[A-Za-z_]', src_text, re.M
+    )
     tool_names = set(spec_style) | set(builder_style)
+    used_dispatch_fallback = not tool_names
+    # Some small servers declare only a dispatch dictionary. Fall back to that
+    # style only when no explicit tool specs/builders are visible: combining
+    # both would misclassify private page handlers in a broader HANDLERS map as
+    # model-visible tools.
+    if not tool_names:
+        tool_names = set(dispatch_style)
     caps = pj.get("entryPoints")
     if caps is not None and not isinstance(caps, dict):
         fail("entryPoints must be an object (§3b)")
@@ -403,18 +414,206 @@ if server_py.exists():
             fail(f"entryPoints.{where} names `{tool_name}`, which is not in your tools — "
                  "a declaration that does not resolve is worse than none (§3b)")
 
+    ui_block = caps.get("ui") if isinstance(caps.get("ui"), dict) else {}
+    ui_open = ui_block.get("open") if ui_block else None
+    if isinstance(ui_open, str) and ui_open and not ui_open.endswith("_open_ui"):
+        fail(f"entryPoints.ui.open names `{ui_open}`, but the current MadCowork host "
+             "discovers module screens only from a tool ending in `_open_ui`; "
+             "entryPoints is checker metadata and is not yet consumed by the host (§3b, §4)")
+
     if (MODULE / "ui").is_dir():
+        open_ui_tools = sorted(n for n in tool_names if n.endswith("_open_ui"))
+        if not open_ui_tools:
+            fail("this module has a UI but no model-visible tool ends in `_open_ui`; "
+                 "the current MadCowork host will not discover the screen (§4)")
         if "panel" not in caps:
             warn("this module has a UI but declares no panel channel (§11b): the model "
                  "cannot see or steer what the user is looking at. Vendor template/_panel.py "
                  "and declare entryPoints.panel if you want it.")
         if "ui" not in caps:
             warn("this module has a UI but does not declare entryPoints.ui.open (§3b): the "
-                 "host cannot offer a button for it and has to hope the model picks the right tool.")
+                 "current host can still discover an `_open_ui` tool, but the explicit "
+                 "forward-compatible entry-point metadata is missing.")
         # The one thing that is dangerous rather than merely undeclared.
         leaked = sorted(n for n in tool_names if n.endswith(("panel_pull", "panel_dismiss")))
-        if leaked:
+        if leaked and used_dispatch_fallback:
+            warn("dispatch-dictionary fallback also found panel plumbing, but cannot "
+                 "prove that those handlers are model-visible; the leak judgement was "
+                 "skipped. Add explicit tool specs/builders so the checker can distinguish "
+                 "the MCP surface from private page handlers (§11b).")
+        elif leaked:
             fail(f"panel plumbing must not be model-visible (§11b): {leaked}")
+
+        # ── The consuming half (§11b) ────────────────────────────────────
+        # `_panel.py` bounds what the model may write; it does NOT escape it,
+        # and it cannot — escaping belongs to whoever renders. So the checks
+        # below are about the page, not the server:
+        #
+        #   1. a declared channel the UI never reads is decorative
+        #   2. card fields are model output; interpolating them into innerHTML
+        #      without an escape hands the page to whatever the model emits
+        #   3. an unlabelled model judgement sitting next to real numbers is
+        #      the worst outcome this feature can produce
+        ui_files = {
+            path: path.read_text(encoding="utf-8", errors="ignore")
+            for path in sorted((MODULE / "ui").rglob("*"))
+            if path.suffix in (".js", ".html", ".mjs") and path.is_file()
+        }
+        ui_src = "\n".join(ui_files.values())
+        # Comments are for maintainers. A file that only *mentions* innerHTML
+        # in a warning about innerHTML must not trip the innerHTML rule —
+        # the template's own reference implementation does exactly that.
+        code = re.sub(r"/\*.*?\*/", "", ui_src, flags=re.S)
+        code = re.sub(r"//[^\n]*", "", code)
+
+        if "panel" in caps and "panel_pull" not in code:
+            warn("entryPoints.panel is declared but no UI file calls `panel_pull` (§11b): "
+                 "the model can write cards and set focus, and nothing on the page ever "
+                 "reads them. Declaring the channel does not open it.")
+
+        if "panel_pull" in code:
+            # A card field is unsafe only when it reaches markup raw.
+            # `${esc(card.title)}` is accepted, but `${String(card.title)}` is
+            # not: String is a formatter, not an HTML escape. Track common
+            # callback aliases (`cards.map(item => ...)`) and local aliases so
+            # renaming `card` cannot turn the rule off. This remains a bounded
+            # static check rather than a JavaScript parser, so the safe side is
+            # deliberately an allowlist of known escaping functions.
+            card_vars = {"card", "c"}
+            for pattern in (
+                r"\bcards\s*\.\s*(?:map|forEach)\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)",
+                r"\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+of\s+cards\b",
+            ):
+                card_vars.update(re.findall(pattern, code))
+
+            fields = r"(?:title|lines|level)"
+            var_group = "|".join(re.escape(name) for name in sorted(card_vars))
+            direct = rf"(?:{var_group})\s*(?:\?\.|\.|\[\s*['\"])\s*{fields}"
+            aliases = set()
+            for match in re.finditer(
+                rf"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*({direct})",
+                code,
+            ):
+                aliases.add(match.group(1))
+            for match in re.finditer(
+                rf"(?:{var_group})\s*(?:\?\.|\.)\s*lines\b[^;\n]*?\.\s*map\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)",
+                code,
+            ):
+                aliases.add(match.group(1))
+
+            alias_group = "|".join(re.escape(name) for name in sorted(aliases))
+            tainted = rf"(?:{direct}{'|\\b(?:' + alias_group + r')\b' if alias_group else ''})"
+            safe_escape = r"(?:esc|escapeText|escapeHtml|escapeHTML)"
+            safe_expr = re.compile(rf"^\s*{safe_escape}\s*\(\s*{tainted}\s*\)\s*$", re.S)
+
+            # Only inspect template literals that can feed an innerHTML write.
+            # Looking at every interpolation in the file falsely condemns safe
+            # DOM-only code merely because some unrelated component uses
+            # innerHTML elsewhere. Include a small window before the write so
+            # `const markup = ...; node.innerHTML = markup` is still covered.
+            lines = code.splitlines()
+            markup_code = "\n".join(
+                "\n".join(lines[max(0, index - 8):index + 12])
+                for index, line in enumerate(lines)
+                if "innerHTML" in line
+            )
+            def template_interpolations(source):
+                """Yield complete ${...} spans, including nested template literals."""
+                cursor = 0
+                while True:
+                    start = source.find("${", cursor)
+                    if start < 0:
+                        return
+                    depth = 1
+                    index = start + 2
+                    while index < len(source) and depth:
+                        if source.startswith("${", index):
+                            depth += 1
+                            index += 2
+                            continue
+                        if source[index] == "{":
+                            depth += 1
+                        elif source[index] == "}":
+                            depth -= 1
+                        index += 1
+                    if depth:
+                        return
+                    yield source[start:index], source[start + 2:index - 1]
+                    cursor = index
+
+            line_collection = (
+                rf"(?:{var_group})\s*(?:\?\.|\.|\[\s*['\"])\s*lines"
+                r"(?:\s*['\"]\s*\])?"
+            )
+            safe_lines_map = re.compile(
+                rf"^\s*\(?\s*{line_collection}\s*(?:\|\|\s*\[\s*\])?\s*\)?"
+                r"\s*\.\s*map\s*\(.*\)\s*\.\s*join\s*\(\s*['\"]\s*['\"]\s*\)\s*$",
+                re.S,
+            )
+
+            def interpolation_is_safe(expression):
+                if safe_expr.fullmatch(expression):
+                    return True
+
+                scrubbed = expression
+                for span, nested_expression in template_interpolations(expression):
+                    if (re.search(tainted, nested_expression, flags=re.S)
+                            and not interpolation_is_safe(nested_expression)):
+                        return False
+                    scrubbed = scrubbed.replace(span, "__SAFE_INTERPOLATION__", 1)
+
+                if safe_lines_map.fullmatch(scrubbed):
+                    # `card.lines` controls iteration, but only callback output
+                    # reaches markup. Remove the collection and callback
+                    # declaration, then reject any remaining raw line alias.
+                    residual = re.sub(line_collection, "", scrubbed, count=1)
+                    if alias_group:
+                        residual = re.sub(
+                            rf"\(?\s*\b(?:{alias_group})\b\s*\)?\s*=>",
+                            "=>",
+                            residual,
+                        )
+                    return not re.search(tainted, residual, flags=re.S)
+
+                return not re.search(tainted, scrubbed, flags=re.S)
+
+            raw = []
+            for span, expression in template_interpolations(markup_code):
+                if re.search(tainted, expression, flags=re.S) and not interpolation_is_safe(expression):
+                    raw.append(span)
+            if raw:
+                fail("card fields reach the markup unescaped (§11b): "
+                     f"{raw[:2]} — a card's title and lines are model output, so this is the "
+                     "page rendering whatever the model emitted. Build the nodes "
+                     "(createElement + textContent) or escape every interpolation — see "
+                     "template/ui/app.js for the reference implementation.")
+            # Scoped to the file that actually renders the cards, and stripped
+            # of comments, for two reasons this rule failed to fire before:
+            #
+            #   - plain "MadCowork" matched X-MadCowork-Module-Token, which every
+            #     module sends, so the check could never fail
+            #   - searching every UI file matched the marker where it is *defined*
+            #     (i18n.js), not where it is *used*, so deleting the render still
+            #     passed
+            #
+            # Both were caught by mutating the template and getting silence. This
+            # stays a WARN: "the string is referenced near the renderer" is a
+            # heuristic for "the user sees where this came from", not a proof.
+            renderer = "\n".join(
+                re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", body, flags=re.S))
+                for path, body in ui_files.items()
+                if "panel_pull" in body
+            )
+            # `agentCard(?![s\w])` so the container id `agentCards` does not
+            # satisfy it: that id is present whether or not anything labels the
+            # source, which made this check pass on a renderer with both markers
+            # deleted. Third variant of the same mistake in this one rule — a
+            # pattern matching something that is there for an unrelated reason.
+            if not re.search(r"agentCard(?![s\w])|ac-src|ac-source", renderer):
+                warn("the UI renders panel cards but nothing marks where they came from (§11b): "
+                     "a model's reading of the data, unlabelled beside the data itself, is the "
+                     "worst outcome this channel can produce. The template uses an `agentCard` "
+                     "string in all nine languages.")
 
 # ── Secret scan (the Python `secrets` module is a known false positive) ────
 SECRET = re.compile(r'(api[_-]?key|password|client[_-]?secret)\s*[:=]\s*["\']([^"\']{8,})', re.I)

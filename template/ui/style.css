@@ -33,3 +33,18 @@ li.item { padding:9px 10px; border:1px solid var(--line); border-radius:8px;
           margin-bottom:8px; background:var(--panel); }
 li.item .m { color:var(--muted); font-size:12px; margin-top:2px; }
 .empty { color:var(--muted); font-size:12.5px; padding:8px 0; }
+
+/* 面板通道的卡片(§11b)。刻意與模組自己的資料不同色:模型寫的判讀
+   看起來就必須不同於模組查出來的事實,否則使用者無從分辨哪個該信。 */
+.agent-cards { display: grid; gap: 8px; margin-bottom: 16px; }
+.agent-card { border: 1px solid var(--accent, #6b7cff); border-left-width: 3px;
+  border-radius: 6px; padding: 10px 12px; background: color-mix(in srgb, var(--accent, #6b7cff) 6%, transparent); }
+.agent-card .ac-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.agent-card .ac-src { font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+  opacity: .7; white-space: nowrap; }
+.agent-card .ac-title { font-weight: 600; flex: 1; }
+.agent-card .ac-close { margin-left: auto; font-size: 12px; cursor: pointer;
+  background: none; border: 0; color: inherit; opacity: .6; }
+.agent-card .ac-close:hover { opacity: 1; }
+.agent-card p { margin: 2px 0; font-size: 13px; }
+.agent-card.warn { border-color: var(--warn, #d08a2a); background: color-mix(in srgb, var(--warn, #d08a2a) 8%, transparent); }

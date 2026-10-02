@@ -15,9 +15,9 @@ Use these product documents with this contract:
 
 | Document | Authority |
 |---|---|
-| [Architecture](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/madcowork-architecture-zh.md) | How MadCowork sessions, tools, workspaces, permissions, and runtimes fit together |
-| [Plugin development](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/plugin-development.md) | What the current host actually installs and consumes |
-| [Sandbox and confinement](https://github.com/MadCowork/MadCowork/blob/develop/MadCowork-api/docs/sandbox-and-confinement.md) | Product command/hook confinement design; this contract records the current plugin-runtime boundary separately |
+| [Architecture](docs/madcowork-architecture-zh.md) | How MadCowork sessions, tools, workspaces, permissions, and runtimes fit together |
+| [Plugin development](docs/plugin-development.md) | What the current host actually installs and consumes |
+| [Sandbox and confinement](docs/sandbox-and-confinement.md) | Product command/hook confinement design; this contract records the current plugin-runtime boundary separately |
 | [Audited 0.61.0 host baseline](https://github.com/MadCowork/MadCowork/tree/204a64a83f2600711b37b412f626c8474c63fa5b/MadCowork-api) | Immutable compatibility reference used for the truth table below |
 
 A module can provide tools the model calls, a screen the person operates, and
@@ -159,3 +159,5 @@ contract drift instead of failing mysteriously on a user's machine.
 ## License
 
 Apache-2.0. The contract, the checker and the template are yours to use.
+
+> `docs/` 內三份文件是主程式 repo(私有)`MadCowork-api/docs/` 的公開副本,快照自 develop 整合分支 74da8cd6(2026-10-02);以主程式 repo 為準,更新時重新複製。
